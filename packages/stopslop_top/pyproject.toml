@@ -1,0 +1,14 @@
+[project]
+name = "stopslop_top"
+version = "0.1.0"
+description = "Read-only terminal monitor for StopSlop"
+requires-python = ">=3.14"
+dependencies = ["stopslop", "rich>=13", "python-dotenv>=1"]
+[project.scripts]
+stopslop-top = "stopslop_top.top:main"
+slopstop-top = "stopslop_top.top:main"
+[tool.uv.sources]
+stopslop = { workspace = true }
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13"]
+build-backend = "uv_build"

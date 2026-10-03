@@ -10,7 +10,7 @@ def isolated_state(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[1]
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(str(root / "packages" / name / "src")
-                                                   for name in ("stopslop", "stopslop_demo")))
+                                                   for name in ("stopslop", "stopslop_demo", "stopslop_top")))
     yield
     logger = logging.getLogger("stopslop.audit")
     for handler in list(logger.handlers):

@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 members = [
     "stopslop",
     "stopslop-demo",
+    "stopslop-top",
     "stopslop-workspace",
 ]
 
@@ -1041,7 +1042,6 @@ dependencies = [
     { name = "httpx" },
     { name = "python-dotenv" },
     { name = "regex" },
-    { name = "rich" },
     { name = "structlog" },
     { name = "uvicorn" },
 ]
@@ -1058,7 +1058,6 @@ requires-dist = [
     { name = "laya", marker = "extra == 'laya'", specifier = ">=0.3.20" },
     { name = "python-dotenv", specifier = ">=1" },
     { name = "regex", specifier = ">=2024.11.6" },
-    { name = "rich", specifier = ">=13" },
     { name = "structlog", specifier = ">=25" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
@@ -1082,6 +1081,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "stopslop-top"
+version = "0.1.0"
+source = { editable = "packages/stopslop_top" }
+dependencies = [
+    { name = "python-dotenv" },
+    { name = "rich" },
+    { name = "stopslop" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "python-dotenv", specifier = ">=1" },
+    { name = "rich", specifier = ">=13" },
+    { name = "stopslop", editable = "packages/stopslop" },
+]
+
+[[package]]
 name = "stopslop-workspace"
 version = "0.1.0"
 source = { virtual = "." }
@@ -1091,6 +1107,7 @@ dev = [
     { name = "httpx" },
     { name = "pytest" },
     { name = "stopslop-demo" },
+    { name = "stopslop-top" },
 ]
 
 [package.metadata]
@@ -1100,6 +1117,7 @@ dev = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "pytest", specifier = ">=8" },
     { name = "stopslop-demo", editable = "packages/stopslop_demo" },
+    { name = "stopslop-top", editable = "packages/stopslop_top" },
 ]
 
 [[package]]

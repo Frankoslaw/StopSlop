@@ -20,7 +20,7 @@ audit metadata, automated positive/negative tests, and an interactive NVIDIA dem
 See [governance](governance.md) for configuration and operating limits.
 
 AgentGuard and an authenticated authorization endpoint now provide explicit tool/MCP
-and memory operation permissions. The TUI supports scrollable violation and opted-in
+and memory operation permissions. The TUI supports scrollable violation and recorded
 chat history; runtime state is consolidated in one SQLite repository.
 
 Still outside the demonstrated scope: operating system quarantine, repository

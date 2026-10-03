@@ -169,14 +169,10 @@ def main():
     release = commands.add_parser("release-orphan", help="Release a reservation only after its owner process has exited")
     release.add_argument("ticket")
     release.add_argument("--state-file")
-    export = commands.add_parser("export", help="Export audit, violations, incidents or opted-in chats as JSON")
+    export = commands.add_parser("export", help="Export audit, violations, incidents or recorded chats as JSON")
     export.add_argument("kind", choices=("audit", "violation", "incident", "chat"))
     export.add_argument("--state-file")
-    migrate = commands.add_parser("migrate", help="Import legacy telemetry/feeds into SQLite; source files stay intact")
-    migrate.add_argument("--state-file")
-    for option in ("metrics-file", "audit-file", "incidents-file", "dynamic-policy-file", "policy-file"):
-        migrate.add_argument("--" + option)
-    for command in (record, reset, reservations, release, export, migrate):
+    for command in (record, reset, reservations, release, export):
         command.add_argument("--env-file", default=".env")
     args = parser.parse_args()
     try:
@@ -192,15 +188,6 @@ def main():
             repository = SQLiteRepository(args.state_file, read_only=True)
             try:
                 print(json.dumps(repository.records(args.kind, repository.count(args.kind)), indent=2))
-            finally:
-                repository.close()
-        elif args.command == "migrate":
-            from .migrate import import_legacy
-            repository = SQLiteRepository(args.state_file)
-            try:
-                print(json.dumps(import_legacy(repository, metrics_file=args.metrics_file, audit_file=args.audit_file,
-                                              incidents_file=args.incidents_file, dynamic_policy_file=args.dynamic_policy_file,
-                                              base_policy_file=args.policy_file)))
             finally:
                 repository.close()
         else:

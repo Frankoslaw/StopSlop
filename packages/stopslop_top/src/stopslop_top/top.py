@@ -14,39 +14,12 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from .repository import SQLiteRepository
+from dotenv import load_dotenv
+from stopslop.processes import process_alive
+from stopslop.repository import SQLiteRepository
 from .terminal_keys import keyboard
 from .viewer import Viewer
 
-from .config import Settings
-
-
-def process_alive(pid):
-    if type(pid) is not int or pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = kernel.OpenProcess(0x1000, False, pid)
-        if not handle:
-            return ctypes.get_last_error() == 5  # Access denied: process exists.
-        try:
-            code = wintypes.DWORD()
-            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
-        finally:
-            kernel.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-        return True
-    except PermissionError:
-        return True
-    except ProcessLookupError:
-        return False
 
 
 def read_sessions(path):
@@ -160,7 +133,7 @@ def dashboard(sessions, warnings, now=None):
                          f"{control['threshold']:g}%" if "threshold" in control else "deterministic")
     if not controls.row_count:
         controls.add_row("Waiting for policy controls", "", "", "")
-    return Group(Panel(summary, title="[bold cyan]slopstop-top[/] · LIVE", subtitle="Ctrl+C to quit · totals include saved sessions"),
+    return Group(Panel(summary, title="[bold cyan]stopslop-top[/] · LIVE", subtitle="Ctrl+C to quit · totals include saved sessions"),
                  Panel(processes, title="Sessions · latest 8"), Panel(limits, title="Quota usage · active sessions"),
                  Panel(controls, title="Active controls · latest active policy"),
                  Panel(recent, title="Recent violations · latest 8"),
@@ -171,7 +144,7 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="Browse StopSlop metrics, violations and opted-in chats")
+    parser = argparse.ArgumentParser(description="Browse StopSlop metrics, violations and recorded chats")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--state-file", help="Database used by the gateway and demo")
     parser.add_argument("--interval", type=float, default=.5)
@@ -179,7 +152,8 @@ def main():
     args = parser.parse_args()
     if not math.isfinite(args.interval) or args.interval <= 0:
         parser.error("--interval must be finite and positive")
-    path = Path(args.state_file or Settings.load(args.env_file).state_file)
+    load_dotenv(Path(args.env_file), override=False)
+    path = Path(args.state_file or os.getenv("STOPSLOP_STATE_FILE", "stopslop.sqlite3"))
     console = Console()
     if args.once or not console.is_terminal or not sys.stdin.isatty():
         console.print(dashboard(*read_sessions(path)))

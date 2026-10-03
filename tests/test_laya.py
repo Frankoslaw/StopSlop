@@ -67,3 +67,46 @@ def test_local_load_failure_is_closed(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(load=fail))
     with pytest.raises(PolicyError, match="^laya_unavailable$"):
         Policy(configuration(tmp_path)).route({"messages": [{"role": "user", "content": "NDA details"}]})
+
+
+def test_prepare_loads_once_before_assessment(tmp_path, monkeypatch):
+    calls = []
+    def load(model, device):
+        calls.append((model, device))
+        return SimpleNamespace(predict=lambda state, questions: {"answers": {
+            name: {"type": "noul", "noul": .1} for name in questions}})
+    monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(load=load))
+    policy = Policy(configuration(tmp_path))
+    policy.prepare_models()
+    policy.prepare_models()
+    policy.route({"messages": [{"role": "user", "content": "Safe agenda"}]})
+    assert calls == [("convaiinnovations/laya", "cpu")]
+
+
+def test_prepare_failure_stops_before_requests(tmp_path, monkeypatch):
+    from stopslop.evaluators import EvaluationError
+    def fail(*args, **kwargs):
+        raise RuntimeError("download failed with private details")
+    monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(load=fail))
+    policy = Policy(configuration(tmp_path))
+    with pytest.raises(EvaluationError, match="^laya_unavailable$"):
+        policy.prepare_models()
+    assert policy.runtime.stats["requests"] == 0
+
+
+def test_prepare_includes_laya_budget_fallback(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from pathlib import Path
+    config = configuration(tmp_path, "llm")
+    path = Path(config.policy_file)
+    data = json.loads(path.read_text())
+    data["budget_fallback"] = {"route": "local", "classifier": "laya"}
+    path.write_text(json.dumps(data))
+    calls = []
+    monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(load=lambda model, device: calls.append(model) or object()))
+    policy = Policy(config)
+    policy.prepare_models()
+    assert calls == [config.laya_model]
+    deterministic = Policy(replace(config, deterministic=True))
+    deterministic.prepare_models()
+    assert calls == [config.laya_model]

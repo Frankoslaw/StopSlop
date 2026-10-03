@@ -14,6 +14,19 @@ class LayaEvaluator:
         self._agent = None
         self._lock = Lock()
 
+    def prepare(self):
+        """Download and load weights before interactive progress starts."""
+        try:
+            with self._lock:
+                self._load_agent()
+        except Exception:
+            raise EvaluationError("laya_unavailable") from None
+
+    def _load_agent(self):
+        if self._agent is None:
+            import laya
+            self._agent = laya.load(self.model, device=self.device)
+
     def assess_targets(self, messages, rules, target_start):
         return self.assess(messages, rules, target_start)
 
@@ -25,9 +38,7 @@ class LayaEvaluator:
             # Lazy import/loading keeps regex-only and deterministic use lightweight.
             # Serialize access because the model runtime may reuse inference buffers.
             with self._lock:
-                if self._agent is None:
-                    import laya
-                    self._agent = laya.load(self.model, device=self.device)
+                self._load_agent()
                 answers = self._agent.predict({"messages": messages}, questions)["answers"]
                 probabilities = {}
                 for name in questions:

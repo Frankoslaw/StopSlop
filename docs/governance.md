@@ -34,7 +34,7 @@ Integrate the guard directly before each side effect. Registered resource names 
 
 Sessions and metrics, full timestamped violation history, completion audits and incident metadata are stored in SQLite. `slopstop-top` offers Overview, Violations and Chats tabs with list/detail scrolling. Audit export writes JSON to stdout; there are no automatic export files. The monitor is read-only.
 
-Content logging is opt-in through `--log-chats` / `STOPSLOP_LOG_CHATS`. It stores original inputs and delivered replies, including restored caller data. A blocked attempt records input and status, with no delivered response. Authorization headers, configured provider credentials and replacement dictionaries are excluded. Inputs can themselves contain credentials or personal information; logging does not redact those originals. Protect the database through deployment file permissions. Existing logs remain when logging is turned off.
+Content logging is enabled by default. Disable it with `--no-log-chats` / `STOPSLOP_LOG_CHATS=false`. It stores original inputs and delivered replies, including restored caller data. A blocked attempt records input and status, with no delivered response. Authorization headers, configured provider credentials and replacement dictionaries are excluded. Inputs can themselves contain credentials or personal information; logging does not redact those originals. Protect the database through deployment file permissions. Existing logs remain when logging is turned off.
 
 ## Incident-driven controls
 
@@ -44,4 +44,4 @@ Externally managed policy feeds remain supported as configuration files. Text si
 
 ## Validation
 
-The automated suite uses mocked providers and classifiers. It checks positive/negative enforcement cases, admission across processes, reload races, persisted consumption, failure accounting, request limits, regex timeouts, opt-in content logging, permission callbacks and TUI pagination. Passing tests does not establish real classifier precision/recall or production exploit coverage. Performance and real-model accuracy still need measurement on the intended deployment; future scalability is outside this change.
+The automated suite uses mocked providers and classifiers. It checks positive/negative enforcement cases, admission across processes, reload races, persisted consumption, failure accounting, request limits, regex timeouts, content logging controls, permission callbacks and TUI pagination. Passing tests does not establish real classifier precision/recall or production exploit coverage. Performance and real-model accuracy still need measurement on the intended deployment; future scalability is outside this change.

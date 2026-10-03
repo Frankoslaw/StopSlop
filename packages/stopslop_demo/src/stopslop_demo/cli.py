@@ -13,9 +13,11 @@ import logging
 import time
 
 
-def chat(client, model, messages, expected_action=None, max_tokens=96, retries=0):
+def chat(client, model, messages, expected_action=None, max_tokens=96, retries=0, prepare=None):
     # Normal NVIDIA/OpenAI example; enforcement is injected at construction.
     options = {"reasoning_budget": 0} if model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning" else {}
+    if prepare is not None:
+        prepare()
     with Spinner():
         for attempt in range(retries + 1):
             try:
@@ -48,11 +50,14 @@ def chat(client, model, messages, expected_action=None, max_tokens=96, retries=0
 
 def main():
     configure_console()
-    parser = argparse.ArgumentParser(description="NVIDIA chat with an in-process StopSlop router")
+    parser = argparse.ArgumentParser(description="OpenAI-compatible chat with an in-process StopSlop router")
     parser.add_argument("prompt", nargs="?", help="Single prompt; omit for interactive chat")
     parser.add_argument("--scenario", nargs="?", const="nda", choices=SCENARIOS, help="Run scripted turns in order (default: nda)")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--policy", choices=POLICIES)
+    parser.add_argument("--classifier", dest="classifier_override", choices=("laya", "jev", "llm"), help="Override policy and budget fallback classifier")
+    parser.add_argument("--main-provider", choices=("nvidia", "openai", "ollama"))
+    parser.add_argument("--main-base-url")
     parser.add_argument("--model", dest="main_model")
     parser.add_argument("--timeout", type=float)
     parser.add_argument("--max-tokens", type=int, default=96, help="Maximum reply tokens (default: 96)")
@@ -63,7 +68,7 @@ def main():
     parser.add_argument("--local-model")
     parser.add_argument("--local-base-url")
     parser.add_argument("--dynamic-policy-file")
-    parser.add_argument("--log-chats", action="store_true", default=None, help="Store request messages and delivered replies in SQLite")
+    parser.add_argument("--log-chats", action=argparse.BooleanOptionalAction, default=None, help="Record chats in SQLite (default: enabled; disable with --no-log-chats)")
     parser.add_argument("--state-file")
     args = parser.parse_args()
     if args.max_tokens <= 0:
@@ -74,7 +79,9 @@ def main():
         parser.error("Use --scenario or a single prompt, not both")
     logger = configure_logs(args.color)
     try:
-        settings = Settings.load(args.env_file, policy=args.policy, main_model=args.main_model, timeout=args.timeout,
+        settings = Settings.load(args.env_file, policy=args.policy, main_provider=args.main_provider,
+                                 main_base_url=args.main_base_url, main_model=args.main_model, timeout=args.timeout,
+                                 classifier_override=args.classifier_override,
                                  policy_file=args.policy_file, local_model=args.local_model, local_base_url=args.local_base_url,
                                  deterministic=args.deterministic, dynamic_policy_file=args.dynamic_policy_file,
                                  log_chats=args.log_chats, state_file=args.state_file)
@@ -86,6 +93,7 @@ def main():
         if router.policy.injected_evaluator is None:
             from stopslop.preflight import check_semantic_setup
             check_semantic_setup(settings)
+        router.policy.prepare_models()
         logger.info("Policy file=%s evaluation backend=%s", settings.policy_file or "global",
                     "deterministic only" if settings.deterministic else router.policy.evaluator.name + " (" + router.policy.evaluator.model + ")")
     except (ValueError, OSError) as error:
@@ -97,7 +105,7 @@ def main():
                 http_client=httpx.Client(transport=router, timeout=settings.timeout),
                 timeout=settings.timeout, max_retries=0) as client:
         if args.prompt is None and scenario is None:
-            print("NVIDIA chat. Type /quit to exit. Each turn is checked by the configured policies before the chat model runs.")
+            print(f"{settings.main_provider.upper()} chat. Type /quit to exit. Each turn is checked by the configured policies before the chat model runs.")
         if scenario is not None:
             print("Scenario: " + args.scenario + " (invented demonstration data)", flush=True)
         turn_number = 0
@@ -125,7 +133,7 @@ def main():
             candidate = messages + [{"role": "user", "content": prompt}]
             try:
                 answer = chat(client, settings.main_model, candidate, expected_action=turn.expected_action,
-                              max_tokens=args.max_tokens, retries=args.retries) if turn else chat(client, settings.main_model, candidate, max_tokens=args.max_tokens)
+                              max_tokens=args.max_tokens, retries=args.retries, prepare=router.policy.prepare_models) if turn else chat(client, settings.main_model, candidate, max_tokens=args.max_tokens, prepare=router.policy.prepare_models)
                 messages = candidate + [{"role": "assistant", "content": answer or ""}]
             except KeyboardInterrupt:
                 logger.warning("Cancelled while waiting for the backend; no retry was made.")

@@ -99,7 +99,7 @@ class Runtime:
             self.blocked_clients.discard(client_id)
 
     def release_orphan(self, ticket):
-        from .top import process_alive
+        from .processes import process_alive
         with self.state():
             if ticket not in self.pending:
                 raise ValueError("Unknown reservation")
@@ -140,7 +140,7 @@ class Runtime:
         self.repository.append("audit", self.clock(), self.session_id, dict(event=event, **details))
 
     def log_chat(self, messages, response=None, **details):
-        # Explicit opt-in; authorization headers and replacement dictionaries never enter this API.
+        # Authorization headers and replacement dictionaries never enter this API.
         self.repository.append("chat", self.clock(), self.session_id,
                                dict(messages=messages, response=response, **details))
 

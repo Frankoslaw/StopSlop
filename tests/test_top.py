@@ -4,7 +4,7 @@ import os
 from rich.console import Console
 
 from stopslop.runtime import Runtime
-from stopslop.top import budget_usage, dashboard, process_alive, read_sessions
+from stopslop_top.top import budget_usage, dashboard, process_alive, read_sessions
 
 
 def test_concurrent_sessions_and_shutdown(tmp_path):
@@ -50,3 +50,21 @@ def test_waiting_and_unreadable_snapshots_render(tmp_path):
     sessions, warnings = read_sessions(path)
     console.print(dashboard(sessions, warnings))
     assert "finished" in console.export_text()
+
+
+def test_overview_preserves_styles_without_an_outer_card():
+    from stopslop_top.viewer import Viewer
+    console = Console(width=100, height=60, force_terminal=True)
+    view = Viewer()
+    rendered = view.render(None, console)
+    # The overview body is a group, not an extra panel around the dashboard.
+    from rich.console import Group
+    assert isinstance(rendered.renderables[1], Group)
+    segments = list(console.render(rendered))
+    assert any(segment.style and segment.style.color and segment.style.color.name == "cyan" and "0" in segment.text for segment in segments)
+    assert any(segment.style and segment.style.color and segment.style.color.name == "yellow" and "Waiting for a demo" in segment.text for segment in segments)
+    console.height = 20
+    view.render(None, console)
+    assert view.total > view.page_size
+    view.key("end")
+    console.print(view.render(None, console))

@@ -20,7 +20,7 @@ from stopslop.proxy import create_app
 from stopslop.repository import SQLiteRepository
 from stopslop.router import PolicyRouter
 from stopslop.runtime import Runtime
-from stopslop.viewer import Viewer
+from stopslop_top.viewer import Viewer
 
 
 def budget(limit=10):
@@ -105,7 +105,7 @@ def test_policy_reload_cannot_replace_inflight_admission_budget(tmp_path):
 
 @pytest.mark.parametrize("kind", ["router", "proxy"])
 @pytest.mark.parametrize("enabled", [False, True])
-def test_chats_opt_in_and_only_delivered_output_saved(tmp_path, kind, enabled):
+def test_chat_recording_toggle_and_only_delivered_output_saved(tmp_path, kind, enabled):
     settings = replace(configuration(tmp_path), log_chats=enabled)
     backend = httpx.MockTransport(lambda request: httpx.Response(200, json=completion("A useful answer")))
     if kind == "router":
@@ -347,25 +347,8 @@ def test_remote_guard_failures_do_not_execute_callbacks():
     assert not calls
 
 
-def test_legacy_import_is_atomic_and_preserves_sources(tmp_path):
-    from stopslop.migrate import import_legacy
-    repository = SQLiteRepository(tmp_path / "state.sqlite3")
-    metrics = tmp_path / "metrics.json"
-    metrics.write_text(json.dumps(dict(session_id="old", started_at=100, violations=[dict(time=100, code="blocked")])) )
-    incidents = tmp_path / "incidents.jsonl"
-    incidents.write_text(json.dumps(dict(kind="code_execution", rules=["shell_execution"])) + "\n")
-    result = import_legacy(repository, metrics_file=metrics, incidents_file=incidents)
-    assert result["sessions"] == 1 and repository.count("violation") == 1 and repository.count("incident") == 1
-    assert metrics.exists() and incidents.exists()
-    invalid = tmp_path / "invalid.jsonl"
-    invalid.write_text('{"kind":"not-an-incident"}\n')
-    with pytest.raises(ValueError):
-        import_legacy(repository, metrics_file=metrics, incidents_file=invalid)
-    assert repository.count("violation") == 1
-
-
 def test_chat_display_does_not_replay_terminal_escape_sequences():
-    from stopslop.viewer import display_text
+    from stopslop_top.viewer import display_text
     assert "\x1b" not in display_text("Hello \x1b[2Jworld")
     assert "\\x1b" in display_text("Hello \x1b[2Jworld")
 

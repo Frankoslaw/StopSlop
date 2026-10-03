@@ -7,13 +7,116 @@ A hybrid AI control layer: deterministic privacy/security rules, semantic checks
 ```powershell
 uv sync --all-packages --extra laya
 uv run --no-sync pytest -q
-uv run --no-sync --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.toml --log-chats
-uv run --no-sync --package stopslop slopstop-top
+uv run --no-sync --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.toml
+uv run --no-sync --package stopslop_top stopslop-top
 ```
 
-Copy `.env.example` to `.env` and set `STOPSLOP_MAIN_KEY`. Laya runs locally on CPU and downloads weights on first use. `classifier = "jev"` requires its own key; `classifier = "llm"` uses the configured chat provider. `--deterministic` explicitly disables semantic rules. Classifier failures block forwarding; backends never silently substitute for one another.
+Copy `.env.example` to `.env` and set `STOPSLOP_MAIN_KEY`. Laya runs locally on CPU. The demo downloads and loads classifier weights before starting its request spinner, including a configured Laya budget fallback; later turns check for policy changes before starting progress. Download failures stop the demo before any chat-provider request. `classifier = "jev"` requires its own key; `classifier = "llm"` uses the configured chat provider. `--deterministic` explicitly disables semantic rules. Classifier failures block forwarding; backends never silently substitute for one another.
 
 The demo checks each turn and its generated reply. `--scenario nda` runs invented allowed, filtered and blocked examples. Interactive and single-prompt chat never retry; scenario retries only transient chat HTTP 502/503/504 responses. Tests use mock providers and classifiers, with no API calls or credentials.
+
+## Tasks and workspace packages
+
+Install [just](https://just.systems/) and run `just test`, `just demo`, `just top`, or `just clean`. Set `UV` to override the uv executable. The monitor lives in the separate `packages/stopslop_top` workspace package; the proxy package contains no terminal UI or Rich dependency. Install all workspace packages before running these recipes. The legacy `slopstop-top` command remains an alias supplied by the monitor package.
+
+### Hosted and local demos
+
+`just demo` selects Jev classification and the NVIDIA Build chat API. Fill in `STOPSLOP_JEV_KEY` and `STOPSLOP_NVIDIA_KEY` in `.env`; the NVIDIA URL/model defaults are in `.env.example`.
+
+`just demo-local` selects Laya classification and Ollama chat. Fill in `STOPSLOP_OLLAMA_BASE_URL`, `STOPSLOP_OLLAMA_MODEL` and `STOPSLOP_OLLAMA_KEY` for your connected Ollama endpoint. Laya is prepared before the spinner starts. Ollama must already serve the selected model; the demo does not install or start Ollama.
+
+Both recipes accept extra flags, including a model override:
+
+```powershell
+just demo
+just demo-local --model llama3.2
+just demo-local --model your-installed-model --main-base-url http://your-ollama-host:11434/v1
+```
+
+`--classifier` overrides both the policy's main classifier and its configured budget fallback classifier for this run. This lets the hosted demo use Jev throughout without loading Laya. Provider flags choose the corresponding `STOPSLOP_NVIDIA_*` or `STOPSLOP_OLLAMA_*` settings. Explicit URL/model flags take precedence, followed by provider-specific environment settings, generic `STOPSLOP_MAIN_*` settings, then defaults. Keys stay in the environment. Approve your chosen chat model in `policy.toml`'s `allowed_models`.
+
+## OpenAI SDK, NVIDIA and Ollama
+
+Select the upstream with `--main-provider` or `STOPSLOP_MAIN_PROVIDER` (`nvidia`, `openai`, `ollama`). NVIDIA remains the default. All three use the same policy checks and OpenAI-compatible text Chat Completions endpoint. `STOPSLOP_MAIN_BASE_URL`, `STOPSLOP_MAIN_MODEL` and `STOPSLOP_MAIN_KEY` override provider defaults when provider-specific settings are absent; remove any explicit NVIDIA URL/model entries from an existing `.env` when switching providers. Gateway client tokens and upstream provider keys are separate credentials.
+
+Run one of these PowerShell examples:
+
+**NVIDIA API** (the existing backend):
+
+```powershell
+$env:STOPSLOP_MAIN_KEY = "YOUR_NVIDIA_API_KEY"
+uv run --no-sync --package stopslop stopslop --main-provider nvidia --policy-file policy.toml
+```
+
+**OpenAI API**, using an approved Chat Completions model:
+
+```powershell
+$env:STOPSLOP_MAIN_KEY = "YOUR_OPENAI_API_KEY"
+uv run --no-sync --package stopslop stopslop --main-provider openai --main-base-url https://api.openai.com/v1 --main-model gpt-4.1-mini --policy-file policy.toml
+```
+
+**Local Ollama**: start Ollama and pull the model first. The installed model name must match exactly; the provider supplies a dummy key if no main key is set.
+
+```powershell
+ollama pull llama3.2
+$env:STOPSLOP_MAIN_KEY = "ollama"
+uv run --no-sync --package stopslop stopslop --main-provider ollama --main-base-url http://127.0.0.1:11434/v1 --main-model llama3.2 --policy-file policy.toml
+```
+
+Install the Laya extra for these policy examples. Add the selected model to `policy.toml`'s `allowed_models`, and adjust model-scoped budgets for it. Ollama as the main provider is separate from `STOPSLOP_LOCAL_*`, which configures privacy/budget fallback routing. Hosted semantic checks with `classifier = "llm"` use the selected main provider; Laya keeps semantic classification local.
+
+Install the `openai` Python package in your client environment (`uv add openai`; the workspace demo already depends on it). The client pattern is identical for every upstream:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="YOUR_GATEWAY_CLIENT_TOKEN",  # Any nonempty value for an unauthenticated loopback gateway.
+    max_retries=0,
+)
+response = client.chat.completions.create(
+    model="llama3.2",  # Use your selected upstream model.
+    messages=[{"role": "user", "content": "Explain how rain forms."}],
+    max_tokens=96,
+    stream=False,
+)
+print(response.choices[0].message.content)
+```
+
+By default the gateway replaces the client's model with its configured main model. Use `--preserve-model` to honor client model selection within the policy allowlist. Use `chat.completions.create`; Responses, native Ollama `/api/chat`, streaming, tool calls and multimodal content are unsupported. See the [OpenAI SDK](https://github.com/openai/openai-python) and [Ollama OpenAI compatibility documentation](https://docs.ollama.com/api/openai-compatibility).
+
+### Direct SDK transport (no gateway process)
+
+The synchronous OpenAI SDK can also enforce policies locally through `PolicyRouter`. This works with each provider above; configure the same `STOPSLOP_MAIN_*` environment variables and policy model allowlist:
+
+```python
+import httpx
+from openai import OpenAI
+from stopslop.config import Settings
+from stopslop.router import PolicyRouter
+
+settings = Settings.load(policy_file="policy.toml")
+with OpenAI(
+    base_url=settings.main_base_url,
+    api_key=settings.client_token or settings.main_key,
+    max_retries=0,
+    http_client=httpx.Client(transport=PolicyRouter(settings), timeout=settings.timeout),
+) as client:
+    response = client.chat.completions.create(
+        model=settings.main_model,
+        messages=[{"role": "user", "content": "Explain how rain forms."}],
+        max_tokens=96,
+    )
+    print(response.choices[0].message.content)
+```
+
+For an asynchronous SDK client, use the HTTP gateway example. The demo uses the synchronous transport and accepts the same provider selection:
+
+```powershell
+uv run --no-sync --package stopslop_demo stopslop-demo --main-provider openai --main-base-url https://api.openai.com/v1 --model gpt-4.1-mini --policy-file policy.toml "Explain how rain forms."
+uv run --no-sync --package stopslop_demo stopslop-demo --main-provider ollama --main-base-url http://127.0.0.1:11434/v1 --model llama3.2 --policy-file policy.toml "Explain how rain forms."
+```
 
 ## Edit policy
 
@@ -56,7 +159,7 @@ Input precedence is block > local > filter > allow. Filtering sends unique anony
 
 ## One database
 
-`STOPSLOP_STATE_FILE` / `--state-file` selects one SQLite database, default `stopslop.sqlite3`. Use the same absolute path for the gateway, SDK/demo, monitor and administration. It contains quota consumption, pending reservations, suspensions, sessions, audit records, all violations, incident metadata, generated policies and opted-in chats. No runtime JSON snapshots, log files, incident feeds or session directories are created. SQLite may use a transient rollback journal during transactions.
+`STOPSLOP_STATE_FILE` / `--state-file` selects one SQLite database, default `stopslop.sqlite3`. Use the same absolute path for the gateway, SDK/demo, monitor and administration. It contains quota consumption, pending reservations, suspensions, sessions, audit records, all violations, incident metadata, generated policies and recorded chats. No runtime JSON snapshots, log files, incident feeds or session directories are created. SQLite may use a transient rollback journal during transactions.
 
 The `Repository` protocol in `stopslop.repository` is the persistence boundary. `Runtime`, `Policy`, `PolicyRouter` and `create_app` accept an injected repository. Replacement implementations must provide atomic transactions that serialize admission. SQLite is for a local disk; this project does not implement a distributed database.
 
@@ -87,11 +190,11 @@ The shipped policy enables local fallback for the main model's daily budget. Con
 
 Admission tries the alternate destination once before making a chat-provider call. It preserves redactions, model approvals, authentication and output checks. Every configured budget is checked again for the new model: an overall budget without `models` remains a hard cap, and a fallback model's own quota can still reject the request. A local-only privacy rule cannot switch to a cloud provider. Missing/unapproved destinations fail closed; provider errors do not trigger a budget fallback or retries.
 
-If a hosted classifier uses the exhausted budget, configure an available fallback classifier (usually local Laya) to keep semantic input/output checks active. Classifier errors remain blocking. Response headers `X-StopSlop-Budget-Fallback` and `X-StopSlop-Model`, audit records, metrics and opted-in chat logs identify the fallback destination. `X-StopSlop-Action` continues to describe the input privacy action.
+If a hosted classifier uses the exhausted budget, configure an available fallback classifier (usually local Laya) to keep semantic input/output checks active. Classifier errors remain blocking. Response headers `X-StopSlop-Budget-Fallback` and `X-StopSlop-Model`, audit records, metrics and chat logs identify the fallback destination. `X-StopSlop-Action` continues to describe the input privacy action.
 
 ## Browse the TUI
 
-Run `slopstop-top --state-file PATH` in another terminal:
+Run `stopslop-top --state-file PATH` in another terminal:
 
 - **Overview**: sessions, controls, quota usage and telemetry; scroll to see the full dashboard.
 - **Violations**: timestamped history, newest first, with no 1,000-record browsing cap.
@@ -99,12 +202,12 @@ Run `slopstop-top --state-file PATH` in another terminal:
 
 Tab or 1/2/3 switches views. Arrows, Page Up/Down and Home/End navigate. Enter opens details; Escape returns; Q exits. Details scroll independently. Timestamps include the local UTC offset. `--once` or redirected output prints a dashboard snapshot. The monitor opens SQLite read-only.
 
-Chat content is **off by default**. Enable `--log-chats` on the gateway or demo, or set `STOPSLOP_LOG_CHATS=true`. This stores original input messages, delivered replies, timestamps, model, action and client identity. Blocked attempts have a status and no delivered reply. Headers, provider keys and anonymous replacement dictionaries are not recorded. Original inputs can contain sensitive data; treat the database accordingly. Turning logging off stops new content records but does not remove existing ones.
+Chat recording is **on by default**. Disable new recordings with `--no-log-chats` on the gateway or demo, or set `STOPSLOP_LOG_CHATS=false`. `--log-chats` explicitly enables it again. This stores original input messages, delivered replies, timestamps, model, action and client identity. Blocked attempts have a status and no delivered reply. Headers, provider keys and anonymous replacement dictionaries are not recorded. Original inputs can contain sensitive data; treat the database accordingly. Turning logging off stops new content records but does not remove existing ones.
 
 ## Gateway and agent permissions
 
 ```powershell
-uv run --no-sync --package stopslop stopslop --policy-file policy.toml --preserve-model --log-chats
+uv run --no-sync --package stopslop stopslop --policy-file policy.toml --preserve-model
 ```
 
 Clients send non-streaming text chat to `http://127.0.0.1:8000/v1/chat/completions`. Set `STOPSLOP_ACCESS_TOKENS` to a JSON map of client identities to unique bearer tokens. Non-loopback binding requires those tokens. Remote deployments need HTTPS at the gateway or a reverse proxy. Body limits are configurable with `STOPSLOP_MAX_REQUEST_BYTES` and `STOPSLOP_MAX_RESPONSE_BYTES`.
@@ -140,6 +243,6 @@ stopslop-policy generate --policy-file policy.toml --state-file stopslop.sqlite3
 
 Generation is explicit and bounded. It sends incident metadata and policy definitions, never raw chats, and saves only validated restrictive additions in SQLite. The next request picks them up. `--output policy.dyn.toml` optionally exports configuration for inspection. `--dynamic-policy-file` loads an externally managed additive policy; generated state does not require that flag.
 
-Existing quota SQLite files remain usable: point `--state-file` at the original file to preserve reservations and suspensions. To import legacy telemetry/feeds, run `stopslop-policy migrate --state-file ORIGINAL.sqlite3 --metrics-file metrics.json --audit-file stopslop.log --incidents-file incidents.jsonl`. Optional `--dynamic-policy-file policy.dyn.json --policy-file policy.toml` imports a validated overlay. Import once; repeated imports duplicate telemetry. Source files are preserved. Old `--metrics-file`, `--log-file` and `--incident-file` runtime flags have been removed.
+Stop the gateway, demo and monitor, then run `just clean` to reset local state. This deletes workspace SQLite databases and their journals/WAL files, legacy telemetry, incident feeds, session snapshots and generated `policy.dyn.*` exports. It preserves `.env`, `policy.toml`, source code and dependencies. Set `STOPSLOP_STATE_FILE` in `.env` or the environment to identify a custom database inside the workspace. Migration from older state formats is not supported.
 
 Orphan release refuses live or unknown owner processes. Check that remote provider work has also stopped before releasing a reservation. See [governance](docs/governance.md) for implementation limits and [requirements](docs/requirements.md) for competition scope.

@@ -172,6 +172,21 @@ class Policy:
                                   model=route.payload["model"], action=action,
                                   status=status or ("failed" if failed else "completed"), ticket=route.ticket)
 
+    def prepare_models(self):
+        """Prepare local classifiers outside request progress UI, including fallback."""
+        if self.settings.deterministic or self.injected_evaluator is not None:
+            return
+        definition = self.loader.load()
+        if not definition or not (definition.semantic_rules or
+                (definition.output_definition and definition.output_definition.semantic_rules)):
+            return
+        classifiers = {(definition.classifier or self.settings.classifier)}
+        if definition.budget_fallback and definition.budget_fallback.get("classifier"):
+            classifiers.add(definition.budget_fallback["classifier"])
+        for classifier in classifiers:
+            if classifier == "laya":
+                self.evaluator_for(classifier).prepare()
+
     def evaluator_for(self, classifier):
         if self.settings.deterministic:
             return None

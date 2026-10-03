@@ -11,8 +11,9 @@ POLICIES = ("block", "redirect", "filter", "passthrough")
 
 @dataclass(frozen=True)
 class Settings:
-    main_base_url: str = "https://integrate.api.nvidia.com/v1"
-    main_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+    main_provider: str = "nvidia"
+    main_base_url: str | None = None
+    main_model: str | None = None
     main_key: str = ""
     policy: str = "block"
     fallback_base_url: str = ""
@@ -25,6 +26,7 @@ class Settings:
     local_key: str = "local"
     deterministic: bool = False
     classifier: str = "laya"
+    classifier_override: str = ""
     laya_model: str = "convaiinnovations/laya"
     laya_device: str = "cpu"
     jev_key: str = ""
@@ -32,7 +34,7 @@ class Settings:
     jev_model: str = "jev-latest"
     preserve_model: bool = False
     state_file: str = "stopslop.sqlite3"
-    log_chats: bool = False
+    log_chats: bool = True
     max_request_bytes: int = 2097152
     max_response_bytes: int = 4194304
     access_tokens: str = ""
@@ -41,9 +43,25 @@ class Settings:
     timeout: float = 120.0
 
     def __post_init__(self):
+        providers = {
+            "nvidia": ("https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"),
+            "openai": ("https://api.openai.com/v1", "gpt-4.1-mini"),
+            "ollama": ("http://127.0.0.1:11434/v1", None),
+        }
+        if self.main_provider not in providers:
+            raise ValueError("main_provider must be nvidia, openai or ollama")
+        base_url, model = providers[self.main_provider]
+        object.__setattr__(self, "main_base_url", self.main_base_url or base_url)
+        object.__setattr__(self, "main_model", self.main_model or model)
+        if not self.main_model:
+            raise ValueError("ollama requires main_model matching an installed model")
+        if self.main_provider == "ollama" and not self.main_key:
+            object.__setattr__(self, "main_key", "ollama")
         for name in ("max_request_bytes", "max_response_bytes"):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.classifier_override and self.classifier_override not in ("laya", "jev", "llm"):
+            raise ValueError("classifier_override must be laya, jev or llm")
         if self.classifier not in ("laya", "jev", "llm"):
             raise ValueError("classifier must be laya, jev or llm")
         if self.policy not in POLICIES:
@@ -75,10 +93,15 @@ class Settings:
             if value is not None:
                 if name in ("deterministic", "preserve_model", "log_chats"):
                     if value.lower() not in ("true", "false", "1", "0"):
-                        raise ValueError("STOPSLOP_DETERMINISTIC must be true or false")
+                        raise ValueError(f"STOPSLOP_{name.upper()} must be true or false")
                     values[name] = value.lower() in ("true", "1")
                 else:
                     values[name] = (float(value) if name == "timeout" else int(value)
                                     if name in ("max_request_bytes", "max_response_bytes") else value)
+        provider = overrides.get("main_provider") or values.get("main_provider", "nvidia")
+        for field in ("base_url", "model", "key"):
+            value = os.getenv(f"STOPSLOP_{provider.upper()}_{field.upper()}")
+            if value:
+                values["main_" + field] = value
         values.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**values)

@@ -185,3 +185,23 @@ def test_jev_questions_contain_explicit_targets_even_with_long_history():
         assert question["target_message"] == message
         assert question["target_index"] == index
         assert question["policy"] == rule["description"]
+
+
+def test_chat_prepares_before_spinner_and_provider(monkeypatch):
+    from openai import OpenAI
+    from stopslop_demo import cli
+    events = []
+    class Progress:
+        def __enter__(self):
+            events.append("spinner")
+        def __exit__(self, *args):
+            events.append("stop")
+    monkeypatch.setattr(cli, "Spinner", Progress)
+    def upstream(request):
+        events.append("provider")
+        return httpx.Response(200, json=completion())
+    with OpenAI(api_key="mock", max_retries=0,
+                http_client=httpx.Client(transport=httpx.MockTransport(upstream))) as client:
+        cli.chat(client, "mock", [{"role": "user", "content": "Hello"}],
+                 prepare=lambda: events.append("prepare"))
+    assert events == ["prepare", "spinner", "provider", "stop"]
