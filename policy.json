@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "default_action": "filter",
+  "rules": [
+    {"id": "bank_account", "action": "filter"},
+    {"id": "iban", "action": "filter"},
+    {"id": "credit_card", "action": "filter"},
+    {"id": "phone", "action": "filter"},
+    {"id": "international_phone", "action": "filter"},
+    {"id": "domestic_phone", "action": "filter"},
+    {"id": "email", "action": "filter", "allowed_patterns": ["\\bsupport@example\\.com\\b"]},
+    {"id": "polish_name", "action": "filter"},
+    {"id": "personal_name", "action": "filter"},
+    {"id": "address", "action": "filter"},
+    {"id": "date_of_birth", "action": "filter"},
+    {"id": "pesel", "action": "filter"},
+    {"id": "national_id", "action": "filter"},
+    {"id": "secret", "action": "block"},
+    {"id": "private_key", "action": "block"},
+    {"id": "profanity", "action": "local"},
+    {"id": "confidential", "pattern": "\\b(?:strictly confidential|do not process|ściśle tajne)\\b", "action": "block"}
+  ]
+}

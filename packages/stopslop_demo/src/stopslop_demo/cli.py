@@ -32,9 +32,13 @@ def main():
     parser.add_argument("--policy", choices=POLICIES)
     parser.add_argument("--model", dest="main_model")
     parser.add_argument("--timeout", type=float)
+    parser.add_argument("--policy-file")
+    parser.add_argument("--local-model")
+    parser.add_argument("--local-base-url")
     args = parser.parse_args()
     try:
-        settings = Settings.load(args.env_file, policy=args.policy, main_model=args.main_model, timeout=args.timeout)
+        settings = Settings.load(args.env_file, policy=args.policy, main_model=args.main_model, timeout=args.timeout,
+                                 policy_file=args.policy_file, local_model=args.local_model, local_base_url=args.local_base_url)
         if not settings.main_key:
             parser.error("Set STOPSLOP_MAIN_KEY in .env or the environment")
         router = PolicyRouter(settings)

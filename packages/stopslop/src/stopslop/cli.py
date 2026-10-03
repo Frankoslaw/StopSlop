@@ -11,7 +11,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--policy", choices=POLICIES)
-    for name in ("main-model", "main-base-url", "fallback-model", "fallback-base-url", "rules-file"):
+    for name in ("main-model", "main-base-url", "fallback-model", "fallback-base-url", "rules-file", "policy-file", "local-model", "local-base-url"):
         parser.add_argument("--" + name)
     parser.add_argument("--timeout", type=float)
     args = vars(parser.parse_args())

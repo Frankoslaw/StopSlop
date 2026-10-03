@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 import os
+from urllib.parse import urlsplit
+import ipaddress
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -15,6 +17,10 @@ class Settings:
     fallback_model: str = ""
     fallback_key: str = ""
     rules_file: str = ""
+    policy_file: str = ""
+    local_base_url: str = "http://127.0.0.1:11434/v1"
+    local_model: str = ""
+    local_key: str = "local"
     timeout: float = 120.0
 
     def __post_init__(self):
@@ -24,6 +30,13 @@ class Settings:
             raise ValueError("redirect requires fallback URL, model and key")
         if self.timeout <= 0:
             raise ValueError("timeout must be positive")
+        url = urlsplit(self.local_base_url)
+        try:
+            loopback = ipaddress.ip_address(url.hostname or "").is_loopback
+        except ValueError:
+            loopback = url.hostname == "localhost"
+        if url.scheme not in ("http", "https") or not loopback or url.username or url.password or url.query or url.fragment:
+            raise ValueError("local_base_url must be a loopback HTTP endpoint")
 
     @classmethod
     def load(cls, env_file: str = ".env", **overrides):

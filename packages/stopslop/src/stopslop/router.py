@@ -26,6 +26,18 @@ class PolicyRouter(httpx.BaseTransport):
         outbound = httpx.Request("POST", route.base_url.rstrip("/") + "/chat/completions",
                                  headers=headers, json=route.payload, extensions=request.extensions)
         response = self.upstream.handle_request(outbound)
+        if route.replacements and not response.is_error:
+            try:
+                body = route.restore(json.loads(response.read()))
+            except (ValueError, UnicodeError):
+                response.close()
+                return httpx.Response(502, json={"error": {"code": "upstream_unavailable"}})
+            headers = dict(response.headers)
+            for name in ("content-length", "content-encoding", "transfer-encoding"):
+                headers.pop(name, None)
+            status = response.status_code
+            response.close()
+            response = httpx.Response(status, json=body, headers=headers)
         response.headers["X-StopSlop-Action"] = route.action
         response.headers["X-StopSlop-Rules"] = ",".join(route.rules)
         return response

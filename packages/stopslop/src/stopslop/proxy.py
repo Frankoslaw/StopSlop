@@ -32,6 +32,8 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
             return JSONResponse({"error": {"code": "upstream_unavailable"}}, status_code=502)
         if response.is_error:
             body = {"error": {"code": "upstream_error", "status": response.status_code}}
+        else:
+            body = route.restore(body)
         return JSONResponse(body, status_code=response.status_code,
                             headers={"X-StopSlop-Action": route.action, "X-StopSlop-Rules": ",".join(route.rules)})
     return app
