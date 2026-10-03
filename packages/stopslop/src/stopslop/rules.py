@@ -48,11 +48,15 @@ class Detector:
             ids.add(rule["id"])
             self.rules.append((rule["id"], re.compile(rule["pattern"], re.IGNORECASE), rule.get("validator")))
 
-    def scan(self, text: str) -> list[Match]:
-        return [Match(rule_id, m.start(), m.end())
-                for rule_id, pattern, validator in self.rules
-                for m in pattern.finditer(text)
-                if valid_identifier(m.group(), validator)]
+    def scan(self, text: str, on_rule=None) -> list[Match]:
+        hits = []
+        for rule_id, pattern, validator in self.rules:
+            if on_rule:
+                on_rule(rule_id)
+            hits.extend(Match(rule_id, match.start(), match.end())
+                        for match in pattern.finditer(text)
+                        if valid_identifier(match.group(), validator))
+        return hits
 
     def redact(self, text: str, matches: list[Match]) -> str:
         for start, end, rule_id in reversed(self.spans(matches)):

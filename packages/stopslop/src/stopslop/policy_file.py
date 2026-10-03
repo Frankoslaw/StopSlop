@@ -1,4 +1,4 @@
-"""Validated, local per-rule policy configuration. No remote classifier calls."""
+"""Validated, local per-rule policy configuration. Regex rules and optional Jev semantic rules."""
 import json
 import re
 from importlib.resources import files
@@ -24,8 +24,9 @@ class PolicyFile:
         self.default_action = data.get("default_action", "block")
         self.actions = {}
         self.exceptions = {}
+        self.semantic_rules = []
         for entry in entries:
-            if not isinstance(entry, dict) or set(entry) - {"id", "pattern", "validator", "action", "allowed_patterns"}:
+            if not isinstance(entry, dict) or set(entry) - {"id", "pattern", "validator", "action", "allowed_patterns", "description", "threshold"}:
                 raise ValueError("Invalid policy rule fields")
             rule_id = entry.get("id")
             if not isinstance(rule_id, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", rule_id) or rule_id in self.actions:
@@ -33,6 +34,19 @@ class PolicyFile:
             action = entry.get("action", self.default_action)
             if not isinstance(action, str) or action not in ACTIONS:
                 raise ValueError(f"Invalid action for {rule_id}")
+            if "description" in entry:
+                description = entry["description"]
+                threshold = entry.get("threshold", 80)
+                if (rule_id in definitions or "pattern" in entry or "validator" in entry
+                        or "allowed_patterns" in entry or not isinstance(description, str)
+                        or not description.strip() or type(threshold) not in (int, float)
+                        or not 0 <= threshold <= 100):
+                    raise ValueError("Semantic rules require a new ID, description and threshold from 0 to 100")
+                self.semantic_rules.append({"id": rule_id, "description": description, "threshold": threshold})
+                self.actions[rule_id] = action
+                continue
+            if "threshold" in entry:
+                raise ValueError("threshold requires a semantic description")
             if rule_id in definitions and ("pattern" in entry or "validator" in entry):
                 raise ValueError("Built-in patterns cannot be overwritten; use a custom rule ID")
             if rule_id not in definitions:
@@ -52,9 +66,9 @@ class PolicyFile:
         except (re.error, TypeError, KeyError) as error:
             raise ValueError("Invalid policy pattern") from error
 
-    def scan(self, text):
+    def scan(self, text, on_rule=None):
         # An exception applies only to a fully contained match of its own rule.
-        return [hit for hit in self.detector.scan(text)
+        return [hit for hit in self.detector.scan(text, on_rule)
                 if not any(m.start() <= hit.start and hit.end <= m.end()
                            for pattern in self.exceptions.get(hit.rule_id, [])
                            for m in pattern.finditer(text))]

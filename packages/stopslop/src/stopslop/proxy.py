@@ -1,13 +1,15 @@
 """Optional HTTP server sharing policy with the in-process router."""
+import json
 import httpx
+from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from .config import Settings
 from .policy import Policy, PolicyError
 
-def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = None, jev_transport=None, evaluator=None) -> FastAPI:
     app = FastAPI(title="StopSlop")
-    policy = Policy(settings)
+    policy = Policy(settings, jev_transport, evaluator)
 
     @app.get("/health")
     async def health():
@@ -20,9 +22,9 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         except ValueError:
             return JSONResponse({"error": {"code": "invalid_json"}}, status_code=400)
         try:
-            route = policy.route(payload)
+            route = await run_in_threadpool(policy.route, payload)
         except PolicyError as error:
-            return JSONResponse({"error": {"code": error.code, "rules": error.rules}}, status_code=error.status)
+            return JSONResponse({"error": {"code": error.code, "rules": error.rules, "risks": error.risks}}, status_code=error.status)
         try:
             async with httpx.AsyncClient(timeout=settings.timeout, transport=transport, follow_redirects=False) as client:
                 response = await client.post(route.base_url.rstrip("/") + "/chat/completions",
@@ -35,5 +37,5 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         else:
             body = route.restore(body)
         return JSONResponse(body, status_code=response.status_code,
-                            headers={"X-StopSlop-Action": route.action, "X-StopSlop-Rules": ",".join(route.rules)})
+                            headers={"X-StopSlop-Risks": json.dumps(route.risks), "X-StopSlop-Action": route.action, "X-StopSlop-Rules": ",".join(route.rules)})
     return app

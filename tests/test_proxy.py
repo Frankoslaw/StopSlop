@@ -8,7 +8,7 @@ from stopslop.rules import Detector
 from cases import CASES
 
 
-@pytest.mark.parametrize("case", [c for c in CASES if not c.known_gap], ids=lambda c: c.id)
+@pytest.mark.parametrize("case", [c for c in CASES if not c.semantic_rule], ids=lambda c: c.id)
 def test_rules(case):
     found = {m.rule_id for m in Detector().scan(case.prompt)}
     assert set(case.expected_rules).issubset(found)

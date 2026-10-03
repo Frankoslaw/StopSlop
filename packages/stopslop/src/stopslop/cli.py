@@ -14,6 +14,7 @@ def main():
     for name in ("main-model", "main-base-url", "fallback-model", "fallback-base-url", "rules-file", "policy-file", "local-model", "local-base-url"):
         parser.add_argument("--" + name)
     parser.add_argument("--timeout", type=float)
+    parser.add_argument("--deterministic", action="store_true", default=None)
     args = vars(parser.parse_args())
     host, port, env_file = args.pop("host"), args.pop("port"), args.pop("env_file")
     try:

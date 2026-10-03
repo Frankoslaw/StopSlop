@@ -21,6 +21,10 @@ class Settings:
     local_base_url: str = "http://127.0.0.1:11434/v1"
     local_model: str = ""
     local_key: str = "local"
+    deterministic: bool = False
+    jev_key: str = ""
+    jev_base_url: str = "https://api.typesafe.ai/v1"
+    jev_model: str = "jev-latest"
     timeout: float = 120.0
 
     def __post_init__(self):
@@ -45,6 +49,11 @@ class Settings:
         for name in cls.__dataclass_fields__:
             value = os.getenv("STOPSLOP_" + name.upper())
             if value is not None:
-                values[name] = float(value) if name == "timeout" else value
+                if name == "deterministic":
+                    if value.lower() not in ("true", "false", "1", "0"):
+                        raise ValueError("STOPSLOP_DETERMINISTIC must be true or false")
+                    values[name] = value.lower() in ("true", "1")
+                else:
+                    values[name] = float(value) if name == "timeout" else value
         values.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**values)

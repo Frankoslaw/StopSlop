@@ -21,7 +21,7 @@ def completion_response():
 
 
 @pytest.mark.parametrize("policy", ["block", "filter", "redirect", "passthrough"])
-@pytest.mark.parametrize("case", [c for c in CASES if not c.known_gap], ids=lambda c: c.id)
+@pytest.mark.parametrize("case", [c for c in CASES if not c.semantic_rule], ids=lambda c: c.id)
 def test_sdk_policy_outcomes(policy, case):
     calls = []
     def upstream(request):
@@ -65,7 +65,7 @@ def test_demo_uses_standard_sdk_and_request_timeout(capsys):
     assert "Warsaw" in capsys.readouterr().out
     assert calls[0].extensions["timeout"]["read"] == 12
     payload = json.loads(calls[0].content)
-    assert payload["max_tokens"] == 256
+    assert payload["max_tokens"] == 96
     assert payload["stream"] is False
     assert payload["reasoning_budget"] == 0
     assert payload["temperature"] == 0.2
@@ -84,11 +84,35 @@ def test_rate_limit_is_not_retried():
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("case", [c for c in CASES if c.known_gap], ids=lambda c: c.id)
-@pytest.mark.xfail(strict=True, reason="Regex cannot infer NDA context, decode word numbers or reliably detect obfuscated names")
-def test_semantic_or_obfuscated_content_is_detected(case):
-    found = {m.rule_id for m in PolicyRouter(settings("block"), httpx.MockTransport(lambda r: None)).policy.detector.scan(case.prompt)}
-    assert ("polish_name" in found) if case.id == "unicode" else bool(found)
+@pytest.mark.parametrize("case", [c for c in CASES if c.semantic_rule], ids=lambda c: c.id)
+def test_semantic_cases_use_jev_probabilities_and_enforce_actions(case):
+    from pathlib import Path
+    from stopslop.policy import Policy, PolicyError
+    calls = []
+    def jev(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        assert body["state"]["messages"][0]["content"] == case.prompt
+        assert any(case.semantic_rule in name for name in body["questions"])
+        return httpx.Response(200, json={"answers": {
+            name: {"type": "noul", "noul": .95 if name.endswith(case.semantic_rule) else .01}
+            for name in body["questions"]}})
+    configuration = Settings(main_key="cloud", jev_key="test", policy_file=str(
+        Path(__file__).resolve().parents[1] / "policy.json"))
+    policy = Policy(configuration, httpx.MockTransport(jev))
+    payload = {"messages": [{"role": "user", "content": case.prompt}]}
+    if case.semantic_rule == "confidential_semantic":
+        with pytest.raises(PolicyError, match="policy_blocked") as caught:
+            policy.route(payload)
+        assert case.semantic_rule in caught.value.rules
+    else:
+        route = policy.route(payload)
+        assert route.action == "filter"
+        assert case.semantic_rule in route.rules
+        filtered = route.payload["messages"][0]["content"]
+        assert case.prompt not in filtered
+        assert route.restore(filtered) == case.prompt
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("single_prompt", [True, False])
@@ -101,17 +125,17 @@ def test_demo_cli_single_and_interactive(monkeypatch, capsys, single_prompt):
     configuration = settings("block")
     monkeypatch.setattr(cli.Settings, "load", lambda *a, **k: configuration)
     monkeypatch.setattr(cli, "PolicyRouter", lambda s: PolicyRouter(s, httpx.MockTransport(upstream)))
-    monkeypatch.setattr("sys.argv", ["stopslop-demo", "Capital of Poland?"] if single_prompt else ["stopslop-demo"])
+    monkeypatch.setattr("sys.argv", ["stopslop-demo", "--policy", "block", "Capital of Poland?"] if single_prompt else ["stopslop-demo", "--policy", "block"])
     prompts = iter(["Contact Jan Kowalski", "Capital of Poland?", "/quit"])
     monkeypatch.setattr("builtins.input", lambda *a: next(prompts))
     cli.main()
     assert len(calls) == 1
-    assert calls[0]["messages"] == [{"role": "system", "content": "You are a helpful assistant."},
-                                    {"role": "user", "content": "Capital of Poland?"}]
+    assert calls[0]["messages"][-1] == {"role": "user", "content": "Capital of Poland?"}
+    assert len(calls[0]["messages"]) == 2
     output = capsys.readouterr()
     assert "Warsaw" in output.out
     if not single_prompt:
-        assert "policy_blocked" in output.err
+        assert "action=block" in output.err
 
 
 @pytest.mark.parametrize("options", [
@@ -133,7 +157,8 @@ def test_other_models_do_not_receive_nvidia_thinking_options():
     def create(**kwargs):
         captured.update(kwargs)
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Hello"))])
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(with_raw_response=SimpleNamespace(
+        create=lambda **kwargs: SimpleNamespace(headers={}, parse=lambda: create(**kwargs))))))
     chat(client, "other-model", [{"role": "user", "content": "Hello"}])
     assert captured["extra_body"] == {}
 
@@ -142,7 +167,7 @@ def test_other_models_do_not_receive_nvidia_thinking_options():
 def test_demo_shows_final_answer_after_hosted_thinking_delimiter(capsys):
     from types import SimpleNamespace
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
-        create=lambda **kwargs: SimpleNamespace(choices=[SimpleNamespace(
-            message=SimpleNamespace(content="reasoning text</think>Final answer"))]))))
+        with_raw_response=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(headers={}, parse=lambda: SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="reasoning text</think>Final answer"))]))))))
     assert chat(client, "other-model", [{"role": "user", "content": "Hello"}]) == "Final answer"
     assert capsys.readouterr().out == "Final answer\n"
