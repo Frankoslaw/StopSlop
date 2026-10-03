@@ -4,17 +4,17 @@ Two uv packages: `stopslop` (rules, policy router and optional HTTP proxy) and
 `stopslop_demo` (interactive or single-prompt NVIDIA chat). Python 3.14 required.
 
 ```powershell
-uv sync --all-packages
-uv run pytest -q
-uv run --package stopslop_demo stopslop-demo "Which number is larger, 9.11 or 9.8?"
-uv run --package stopslop_demo stopslop-demo --policy filter
+uv sync --all-packages --extra laya
+uv run --no-sync pytest -q
+uv run --no-sync --package stopslop_demo stopslop-demo "Which number is larger, 9.11 or 9.8?"
+uv run --no-sync --package stopslop_demo stopslop-demo --policy filter
 ```
 
 Set `STOPSLOP_MAIN_KEY` in the ignored root `.env` (see `.env.example`).
 The demo uses `from openai import OpenAI` with a normal chat-completion call.
 One injected `httpx` transport applies policy locally before forwarding to NVIDIA;
-no server, local port, or elevated privileges are needed. Every accepted turn makes one chat-model request, plus an assessment request
-when semantic rules are enabled. Interactive and single-prompt retries are disabled.
+no server, local port, or elevated privileges are needed. Every accepted turn makes one chat-model request. Semantic rules assess both
+input and generated output, retaining conversation context for output assessment. Interactive and single-prompt retries are disabled.
 Scenario mode retries only temporary chat HTTP 502/503/504 errors, at most twice;
 use `--retries 0` to disable them. Evaluator errors, policy blocks, timeouts, and
 HTTP 429 are never retried. HTTP 429 stops the demo. `/quit` exits.
@@ -57,7 +57,7 @@ CLI overrides environment, then `.env`, then defaults. Configure fallback URL/mo
 with `STOPSLOP_FALLBACK_*`. Rules load at startup from `--rules-file` (server) or
 `STOPSLOP_RULES_FILE`; example rules: `packages/stopslop/src/stopslop/default_rules.json`.
 Unlabeled names use a small dictionary; PESEL/bank/card matches require checksums. Regex-only policies do not infer NDA restrictions or decode word numbers.
-Response scanning, streaming and tools are outside this version.
+Generated text is inspected before anonymous tokens are restored. Streaming and tools are unsupported.
 
 Filter keeps a request-local in-memory dictionary from tokens such as
 `[ANON:phone:1]` to original values. Repeated values across all messages share a
@@ -77,8 +77,8 @@ automatically loads it from the current directory unless a global `--policy` or
 separate rules file is chosen:
 
 ```powershell
-uv run --package stopslop_demo stopslop-demo --policy-file policy.json --local-model your-installed-model
-uv run --package stopslop stopslop --policy-file policy.json --local-model your-installed-model
+uv run --no-sync --package stopslop_demo stopslop-demo --policy-file policy.json --local-model your-installed-model
+uv run --no-sync --package stopslop stopslop --policy-file policy.json --local-model your-installed-model
 ```
 
 Start your own OpenAI-compatible local model server first. The default local
@@ -127,20 +127,29 @@ rules extend them. Duplicate IDs, unknown fields/actions, and invalid regexes
 are rejected at startup. Policy files are trusted local configuration: review
 allow exceptions and regexes before enabling them.
 
-Optional server: `uv run --package stopslop stopslop --policy block --port 8000`.
+Optional server: `uv run --no-sync --package stopslop stopslop --policy block --port 8000`.
 Clients can use `http://127.0.0.1:8000/v1`. Only routed text chat is inspected.
 The server shares the demo's policy engine; it is intended for localhost development.
 See [requirements](docs/requirements.md) for the brief competition scope.
 
 
-Natural-language policies with Jev are included in `policy.json`:
+Natural-language policies with local Laya are included in `policy.json`:
 
 ```powershell
-uv run --package stopslop_demo stopslop-demo --policy-file policy.json --local-model your-installed-model
-uv run --package stopslop_demo stopslop-demo --policy-file policy.json "Our unreleased quarterly revenue is two million; summarize it for a customer."
+uv run --no-sync --package stopslop_demo stopslop-demo --policy-file policy.json --local-model your-installed-model
+uv run --no-sync --package stopslop_demo stopslop-demo --policy-file policy.json "Our unreleased quarterly revenue is two million; summarize it for a customer."
 ```
 
-Set `STOPSLOP_JEV_KEY` in the ignored `.env`. The unified policy file extends the
+Laya is the default semantic classifier. Install it with `uv sync --all-packages --extra laya`
+(or `pip install "stopslop[laya]"`). It loads `convaiinnovations/laya` locally on CPU;
+weights download on first use. See the [Laya model card](https://huggingface.co/convaiinnovations/laya) for the SDK.
+Set `STOPSLOP_LAYA_MODEL` and `STOPSLOP_LAYA_DEVICE`
+to choose a checkpoint or device. Original conversations stay in the local process.
+
+Select a classifier in `policy.json` with `"classifier": "laya"` or
+`"classifier": "jev"` alongside `version` and `rules`. If omitted,
+`STOPSLOP_CLASSIFIER` applies (default `laya`). To use hosted Jev, select `jev`
+and set `STOPSLOP_JEV_KEY` in the ignored `.env`. The unified policy file extends the
 existing regex policies with semantic confidentiality, harassment, and obfuscated
 personal-information rules. Write a custom rule using `description` instead of
 `pattern`, an existing action, and a percentage `threshold` (default 80):
@@ -154,7 +163,7 @@ Jev's official endpoint is `https://api.typesafe.ai/v1/systemone` (see
 assessed against each semantic rule in one batched call using Noul yes/no
 probabilities. Risk is `noul * 100`; a value at or above the threshold activates
 that rule. The existing action precedence still applies. Deterministic blocks
-skip Jev. Semantic rules cannot override built-in IDs or use regex exceptions.
+skip semantic inference. Semantic rules cannot override built-in IDs or use regex exceptions.
 
 The demo displays `Running rule (x/z): description` on one updating line,
 then switches that line to response generation with elapsed time. Progress fits
@@ -166,23 +175,22 @@ and ERROR is red for blocks/failures.
 Colors follow terminal support; use `--color always` or `--color never`.
 Router/server responses
 also include `X-StopSlop-Risks`. Block responses include `risks`. A semantic
-`filter` anonymizes the entire flagged message, since Jev does not locate spans;
+`filter` anonymizes the entire flagged message, since semantic classifiers do not locate spans;
 exact anonymous tokens in the reply are restored locally. `local` requires your
 local model as before. Missing keys reject configuration; timeouts, API errors,
-and malformed probabilities reject the request with `jev_unavailable` and never
-send it to a chat model. Jev calls are not retried.
+and malformed probabilities reject the request with `laya_unavailable` or `jev_unavailable` and never
+send it to a chat model. Classifier calls are not retried; Laya never falls back to Jev.
 
-Enabling semantic policies sends the original conversation to TypeSafe for
+Selecting Jev sends the original conversation to TypeSafe for
 assessment, including content later blocked, filtered, or routed locally. Regex-only
 policies do not call Jev. Probabilities are model estimates and may misclassify
-ambiguous inputs; tune thresholds for your use case. Streaming and response
-scanning remain unsupported.
+ambiguous inputs; tune thresholds for your use case. Streaming and tool execution remain unsupported; generated text is inspected before delivery.
 
 
 Use the same policy file without any semantic checks or evaluator credentials:
 
 ```powershell
-uv run --package stopslop_demo stopslop-demo --deterministic --local-model your-installed-model
+uv run --no-sync --package stopslop_demo stopslop-demo --deterministic --local-model your-installed-model
 ```
 
 `--deterministic` ignores all natural-language rules, including injected LLM
@@ -191,11 +199,11 @@ model. `STOPSLOP_DETERMINISTIC=true` is the equivalent environment setting.
 
 Semantic evaluators implement `SemanticEvaluator` in `stopslop.evaluators`.
 `Policy`, `PolicyRouter`, and `create_app` accept an optional `evaluator`.
-Jev is the default. `LLMEvaluator(settings)` scaffolds an OpenAI-compatible
+Laya is the default. `LLMEvaluator(settings)` scaffolds an OpenAI-compatible
 alternative using the existing main URL/model/key (including NVIDIA): inject it
 explicitly in library code, for example `PolicyRouter(settings,
-evaluator=LLMEvaluator(settings))`. The demo never selects it and there is no
-automatic fallback to it. Both adapters use shared probability validation and
+evaluator=LLMEvaluator(settings))`. Select it explicitly with `"classifier": "llm"` in the policy file. There is no
+automatic fallback between classifiers. All adapters use shared probability validation and
 threshold handling. LLM scores are self-reported estimates; malformed responses
 fail closed with `llm_unavailable`. Logs exclude conversation content and keys.
 
@@ -220,7 +228,8 @@ external disclosure of NDA-covered Project Kestrel details (blocked by the seman
 confidentiality rule). The final block is expected and completes the scenario
 successfully. An unexpected policy action or a backend failure after the allowed retries
 exits with an error.
-The scenario requires Jev and the main model credentials; it needs no local model.
+The scenario requires Laya installed and main model credentials; Jev is optional.
+It needs no local chat model.
 `--deterministic` deliberately disables the semantic NDA guard, so this scenario's
 expected final block will fail in that mode.
 
@@ -230,9 +239,9 @@ not cache prompts, assessments, logs, or replies. There is no `make clean` targe
 If Make is unavailable, use the equivalent commands directly:
 
 ```powershell
-uv run pytest -q
-uv run --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.json --color always --max-tokens 96 --timeout 45
-uv run --package stopslop slopstop-top
+uv run --no-sync pytest -q
+uv run --no-sync --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.json --color always --max-tokens 96 --timeout 45
+uv run --no-sync --package stopslop slopstop-top
 ```
 
 
@@ -241,7 +250,7 @@ uv run --package stopslop slopstop-top
 Run `stopslop --host 127.0.0.1 --port 8000 --preserve-model --policy-file policy.json`.
 Set `STOPSLOP_MAIN_BASE_URL` and `STOPSLOP_MAIN_KEY` for your upstream provider,
 and point every client's OpenAI-compatible base URL at `http://127.0.0.1:8000/v1`.
-`--preserve-model` forwards the requested model on the main route; policy-selected
+`--preserve-model` forwards an approved requested model on the main route; policy-selected
 local and fallback routes still use their configured models. This gateway handles
 non-streaming text chat completions. Enforcement covers clients using this endpoint;
 network/firewall controls are needed to prevent clients connecting directly to providers.
@@ -271,8 +280,13 @@ Budgeted requests without `max_tokens` get a 1024-token output cap. These are
 conservative estimates, not model-specific tokenizer counts. Successful responses
 replace reservations with provider `usage` counts; missing usage keeps the estimates.
 Failed calls release reservations. Concurrent calls share reservations within one
-process. Semantic evaluation calls are outside these chat budgets. Use one server
-worker: budgets are in-memory and reset when the process restarts.
+process. Outstanding reservations never expire while work is running. Completed
+usage is charged at completion. Semantic assessments also reserve budget using
+conservative estimates (including question overhead); model selectors apply to their
+classifier model names. The gateway defaults to shared SQLite state in
+`stopslop-state.sqlite3`, preserving quotas and authenticated-client suspensions
+across restarts and coordinating workers on the same host. SDK/demo runtimes
+remain in memory unless `STOPSLOP_STATE_FILE` or `--state-file` is configured.
 
 `metrics.json` is atomically rewritten with cumulative input/output tokens, completed
 requests, failures, pending calls, actions, and timestamped violations. It contains no
@@ -281,17 +295,20 @@ records, including filter/local/redirect policy triggers. Override locations wit
 `--metrics-file` and `--log-file` or their `STOPSLOP_...` environment variables.
 Console violation logs use structlog's pretty renderer; `--json-logs` selects JSON.
 Metrics and logs start a new runtime on startup (logs append); snapshots are telemetry,
-not persisted budget state. Violation history grows for the lifetime of the process.
+not the authoritative budget state. Snapshots retain the latest 1,000 violations; rotated JSON audit logs retain longer history.
+Quota usage and suspensions persist in the separately configured SQLite state.
 
 
 ### Live terminal monitor
 
-Run `make top` or `uv run --package stopslop slopstop-top` in a second terminal,
+Run `make top` or `uv run --no-sync --package stopslop slopstop-top` in a second terminal,
 then run `make demo` or start the gateway. `stopslop-top` is also an alias.
 The display refreshes every half second: running sessions, pending chat calls,
 completed requests, failures, tokens, actions, mean latency, quota usage and
 reservations, recent violations, and warnings at 80% usage. Sessions are policy
-runtimes, not user conversations. Quotas remain independent per runtime.
+runtimes, not user conversations. Runtimes using the same SQLite state share quotas;
+the monitor displays each shared budget scope once. The controls panel shows the
+latest active policy, including output overrides and semantic thresholds.
 Rolling usage and fixed reset countdowns update even while requests are idle.
 
 Use `--metrics-file PATH` or `STOPSLOP_METRICS_FILE` to match a custom producer
@@ -301,4 +318,13 @@ separate snapshots for concurrent processes. Closed or exited sessions remain as
 history; totals include all saved sessions. Remove that directory manually to
 clear history. Snapshots contain counts, model names, budget configuration and
 rule IDs, never conversation text or credentials. No configured budgets displays
-“No active quota limits.” PDFs under `docs/` are ignored by Git.
+"No active quota limits." PDFs under `docs/` are ignored by Git.
+
+
+### Output protection and incident-driven policies
+
+See [governance configuration](docs/governance.md) for inherited output checks,
+explicit output rules, authenticated-client suspension, model allowlists, live policy
+reload, historical attack signatures, and optional `policy.dyn.json` generation.
+Generation is an explicit administrative command using the demo model; live requests
+do not trigger unbounded learning calls or send raw incident content to a generator.

@@ -197,3 +197,11 @@ metrics.json
 *.json.sessions/
 docs/*.pdf
 stopslop.log
+
+# Local control state and incident feeds
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+incidents.jsonl
+policy.dyn.json

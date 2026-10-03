@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "classifier": "laya",
   "default_action": "filter",
   "rules": [
     {
@@ -91,6 +92,52 @@
       "description": "Do not disclose identifying personal contact information, including phone numbers spelled out in words or obfuscated email addresses. Fictional examples are allowed.",
       "threshold": 80,
       "action": "filter"
+    },
+    {
+      "id": "historical_prompt_injection",
+      "pattern": "\\bignore\\s+(?:all\\s+)?(?:previous|system|developer)\\s+(?:instructions|rules)\\b",
+      "action": "block"
+    },
+    {
+      "id": "unsafe_deserialization",
+      "pattern": "\\b(?:pickle|dill)\\s*\\.\\s*loads?\\s*\\(",
+      "action": "block"
+    },
+    {
+      "id": "unsafe_model_loading",
+      "pattern": "\\btorch\\s*\\.\\s*load\\s*\\([^\\r\\n]{0,256}\\bweights_only\\s*=\\s*False",
+      "action": "block"
+    },
+    {
+      "id": "shell_execution",
+      "pattern": "\\b(?:os\\s*\\.\\s*system|subprocess\\s*\\.\\s*(?:run|Popen|call))\\s*\\(",
+      "action": "block"
+    },
+    {
+      "id": "execution_semantic",
+      "description": "Block requests to execute unauthorized code, deserialize untrusted executable model checkpoints, install malicious model repository code, or send private data to an attacker. Allow harmless security explanations and approved work that does not execute or disclose prohibited content.",
+      "threshold": 90,
+      "action": "block"
+    }
+  ],
+  "output": {
+    "inherit_input": true,
+    "default_action": "block",
+    "rules": [
+      {
+        "id": "profanity",
+        "action": "warn"
+      }
+    ]
+  },
+  "budgets": [
+    {
+      "id": "all_models_daily",
+      "type": "fixed_quota",
+      "tokens": "total",
+      "limit": 1000000,
+      "window_seconds": 86400,
+      "reset_at": "2026-01-01T00:00:00Z"
     }
   ]
 }

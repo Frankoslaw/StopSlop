@@ -2,12 +2,17 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import logging
 import re
+import json
+import hmac
+from pathlib import Path
+from threading import Lock
 from .config import Settings
 from .runtime import Runtime
 from .rules import Detector
 from .jev import JevEvaluator
-from .evaluators import EvaluationError, SemanticEvaluator
-from .policy_file import PolicyFile
+from .laya import LayaEvaluator
+from .evaluators import EvaluationError, SemanticEvaluator, LLMEvaluator
+from .policy_loader import PolicyLoader
 
 logger = logging.getLogger("stopslop.audit")
 
@@ -28,6 +33,10 @@ class Route:
 
     risks: dict[str, float] = field(default_factory=dict)
     ticket: str = ""
+    client_id: str = ""
+    definition: object = field(default=None, repr=False)
+    detector: object = field(default=None, repr=False)
+    evaluator: object = field(default=None, repr=False)
 
     def restore(self, body):
         """Restore exact tokens locally, in one pass (never cascade replacements)."""
@@ -50,29 +59,145 @@ class Policy:
     def __init__(self, settings: Settings, jev_transport=None, evaluator: SemanticEvaluator | None = None):
         self.settings = settings
         self.detector = Detector(settings.rules_file)
-        self.definition = PolicyFile(settings.policy_file) if settings.policy_file else None
+        self.loader = PolicyLoader(settings)
+        self.definition = self.loader.load()
+        self.incident_lock = Lock()
+        self.tokens = json.loads(settings.access_tokens) if settings.access_tokens else {}
+        self.injected_evaluator = evaluator
+        self.jev_transport = jev_transport
+        self.evaluator_cache = {}
         if self.definition:
             if settings.rules_file:
                 raise ValueError("Use policy_file or rules_file, not both")
             self.detector = self.definition.detector
-        self.runtime = Runtime(settings.metrics_file, self.definition.budgets if self.definition else [], log_file=settings.log_file)
-        self.evaluator = None if settings.deterministic else (evaluator if evaluator is not None else JevEvaluator(settings, jev_transport))
+        classifier = (self.definition.classifier if self.definition else None) or settings.classifier
+        if settings.deterministic:
+            self.evaluator = None
+        elif evaluator is not None:
+            self.evaluator = evaluator
+        elif classifier == "laya":
+            self.evaluator = LayaEvaluator(settings)
+        elif classifier == "llm":
+            self.evaluator = LLMEvaluator(settings)
+        else:
+            self.evaluator = JevEvaluator(settings, jev_transport)
         if (not settings.deterministic and evaluator is None and self.definition
-                and self.definition.semantic_rules and not settings.jev_key):
+                and classifier == "jev" and (self.definition.semantic_rules or
+                    (self.definition.output_definition and self.definition.output_definition.semantic_rules)) and not settings.jev_key):
             raise ValueError("Semantic policies require STOPSLOP_JEV_KEY")
+        self.evaluator_cache[classifier] = self.evaluator
+        self.runtime = Runtime(settings.metrics_file, self.definition.budgets if self.definition else [],
+                               log_file=settings.log_file, state_file=settings.state_file)
+        self.update_controls(self.definition)
+        self.runtime.write()
 
-    def route(self, payload) -> Route:
+    def update_controls(self, definition):
+        detector = definition.detector if definition else self.detector
+        self.runtime.controls = [dict(id=rule_id, action=definition.action_for(rule_id) if definition else self.settings.policy,
+                                      direction="input", enabled=True) for rule_id, _, _ in detector.rules]
+        if definition:
+            self.runtime.controls += [dict(id=r["id"], action=definition.action_for(r["id"]), direction="input",
+                                           threshold=r["threshold"], enabled=not self.settings.deterministic)
+                                      for r in definition.semantic_rules]
+            semantic_ids = {r["id"] for r in definition.semantic_rules}
+            if definition.output_definition:
+                semantic_ids.update(r["id"] for r in definition.output_definition.semantic_rules)
+            self.runtime.controls += [dict(id=rid, action=a, direction="output",
+                                           enabled=not (self.settings.deterministic and rid in semantic_ids))
+                                      for rid, a in definition.output_actions.items()]
+
+    def authenticate(self, authorization):
+        if not self.tokens:
+            return ""
+        token = authorization[7:] if authorization.startswith("Bearer ") else ""
+        for client_id, expected in self.tokens.items():
+            if hmac.compare_digest(token.encode(), expected.encode()):
+                self.runtime.authorize_client(client_id)
+                return client_id
+        raise PolicyError("unauthorized_client", 401)
+
+    def record_incident(self, kind, rules, **details):
+        if not self.settings.incident_file:
+            return
+        # Evidence is metadata only: no prompts, outputs, tokens, or credentials.
+        from datetime import datetime, timezone
+        incident = dict(time=datetime.now(timezone.utc).isoformat(), kind=kind, rules=list(rules), **details)
+        with self.incident_lock:
+            path = Path(self.settings.incident_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(incident) + "\n")
+
+    def assess(self, evaluator, messages, rules, target_start=0):
+        ticket = ""
+        if self.runtime.budgets:
+            from .jev import violation_questions
+            supports_targets = hasattr(evaluator, "assess_targets")
+            questions = violation_questions(messages, rules, target_start if supports_targets else 0)
+            assessment_payload = {"model": evaluator.model, "messages": [
+                {"content": json.dumps({"state": {"messages": messages}, "questions": questions}) + " " * 2048}],
+                "max_tokens": max(2048, len(questions) * 128)}
+            ticket = self.runtime.reserve(assessment_payload)
         try:
-            route = self._route(payload)
-            ticket = self.runtime.reserve(route.payload)
+            result = (evaluator.assess_targets(messages, rules, target_start)
+                      if target_start and hasattr(evaluator, "assess_targets") else evaluator.assess(messages, rules))
+        except BaseException:
+            if ticket:
+                self.runtime.finish(ticket, action="assessment", failed=True)
+            raise
+        if ticket:
+            self.runtime.finish(ticket, action="assessment")
+        return result
+
+    def inspect_output(self, route, body):
+        from .output import inspect_output
+        return inspect_output(self, route, body)
+
+    def route(self, payload, client_id="") -> Route:
+        self.runtime.request_started()
+        started_at = self.runtime.clock()
+        definition = None
+        try:
+            if self.tokens and client_id not in self.tokens:
+                raise PolicyError("unauthorized_client", 401)
+            self.runtime.authorize_client(client_id)
+            try:
+                definition = self.loader.load()
+            except (OSError, ValueError, TypeError, KeyError):
+                raise PolicyError("invalid_policy_configuration", 503) from None
+            self.definition = definition
+            self.runtime.budgets = definition.budgets if definition else []
+            self.update_controls(definition)
+            route = self._route(payload, definition, client_id)
+            ticket = self.runtime.reserve(route.payload, started_at=started_at)
             if self.runtime.budgets:
                 route.payload.setdefault("max_tokens", 1024)
-            return replace(route, ticket=ticket)
+            return replace(route, ticket=ticket, client_id=client_id)
         except PolicyError as error:
-            self.runtime.violation(error.code, error.rules)
+            self.runtime.violation(error.code, error.rules, direction="input", client_id=client_id,
+                                   action="block", risks=error.risks, backend="none",
+                                   thresholds={r["id"]: r["threshold"] for r in definition.semantic_rules
+                                               if r["id"] in error.rules} if definition else {})
+            if error.code == "policy_blocked":
+                self.record_incident("input_violation", error.rules, direction="input", action="block")
             raise
 
-    def _route(self, payload) -> Route:
+    def _route(self, payload, definition=None, client_id="") -> Route:
+        detector = definition.detector if definition else self.detector
+        classifier = (definition.classifier if definition else None) or self.settings.classifier
+        evaluator = self.injected_evaluator
+        if self.settings.deterministic:
+            evaluator = None
+        elif evaluator is None:
+            if classifier not in self.evaluator_cache:
+                self.evaluator_cache[classifier] = (LayaEvaluator(self.settings) if classifier == "laya"
+                                                    else LLMEvaluator(self.settings) if classifier == "llm"
+                                                    else JevEvaluator(self.settings, self.jev_transport))
+            evaluator = self.evaluator_cache[classifier]
+            semantic = definition and (definition.semantic_rules or
+                       (definition.output_definition and definition.output_definition.semantic_rules))
+            if classifier == "jev" and semantic and not self.settings.jev_key:
+                raise PolicyError("missing_evaluator_key", 503)
         allowed = {"model", "messages", "temperature", "top_p", "max_tokens", "stream", "reasoning_budget"}
         if not isinstance(payload, dict) or set(payload) - allowed or payload.get("stream", False) is not False:
             raise PolicyError("unsupported_payload", 400)
@@ -80,15 +205,23 @@ class Policy:
             raise PolicyError("invalid_reasoning_budget", 400)
         if "model" in payload and (not isinstance(payload["model"], str) or not payload["model"]):
             raise PolicyError("invalid_model", 400)
+        if "max_tokens" in payload and (type(payload["max_tokens"]) is not int or payload["max_tokens"] <= 0):
+            raise PolicyError("invalid_max_tokens", 400)
+        if self.settings.preserve_model:
+            allowed_models = definition.allowed_models if definition and definition.allowed_models else [self.settings.main_model]
+            if payload.get("model", self.settings.main_model) not in allowed_models:
+                raise PolicyError("model_not_allowed", 403)
         messages = payload.get("messages")
-        if not isinstance(messages, list) or not messages or any(
+        if not isinstance(messages, list) or not messages or len(messages) > 1024 or any(
             not isinstance(m, dict) or set(m) != {"role", "content"}
             or m["role"] not in ("system", "user", "assistant", "developer")
             or not isinstance(m["content"], str) for m in messages
         ):
             raise PolicyError("unsupported_messages", 400)
-        semantic_rules = self.definition.semantic_rules if self.definition and self.evaluator else []
-        total = len(self.detector.rules) * len(messages) + len(semantic_rules) * sum(bool(m["content"]) for m in messages)
+        if sum(len(m["content"].encode("utf-8")) for m in messages) > 1048576:
+            raise PolicyError("payload_too_large", 413)
+        semantic_rules = definition.semantic_rules if definition and evaluator else []
+        total = len(detector.rules) * len(messages) + len(semantic_rules) * sum(bool(m["content"]) for m in messages)
         completed = 0
 
         def progress(rule_id, description=None, backend="deterministic"):
@@ -98,40 +231,40 @@ class Policy:
             logger.info("Running rule (%s/%s): %s", completed, total, description,
                         extra={"progress": f"Running rule ({completed}/{total}): {description} [{backend}]"})
 
-        matches = [(self.definition.scan(m["content"], progress) if self.definition else self.detector.scan(m["content"], progress))
+        matches = [(definition.scan(m["content"], progress) if definition else detector.scan(m["content"], progress))
                    for m in messages]
         risks = {}
         # A deterministic block needs no remote assessment.
-        blocked = self.definition and any(self.definition.action_for(hit.rule_id) == "block"
+        blocked = definition and any(definition.action_for(hit.rule_id) == "block"
                                           for hits in matches for hit in hits)
-        if self.definition and self.definition.semantic_rules and not blocked and self.evaluator:
+        if definition and definition.semantic_rules and not blocked and evaluator:
             for message in messages:
                 if message["content"]:
                     for rule in semantic_rules:
-                        progress(rule["id"], rule["description"], self.evaluator.name)
+                        progress(rule["id"], rule["description"], evaluator.name)
             try:
-                semantic, risks = self.evaluator.assess(messages, self.definition.semantic_rules)
+                semantic, risks = self.assess(evaluator, messages, definition.semantic_rules)
             except EvaluationError:
-                logger.error("backend=%s model=%s evaluation failed; chat backend not called", self.evaluator.name, self.evaluator.model)
-                raise PolicyError(f"{self.evaluator.name}_unavailable", 503) from None
+                logger.error("backend=%s model=%s evaluation failed; chat backend not called", evaluator.name, evaluator.model)
+                raise PolicyError(f"{evaluator.name}_unavailable", 503) from None
             for index, message in enumerate(messages):
-                for rule in self.definition.semantic_rules:
+                for rule in definition.semantic_rules:
                     name = f"m{index}_{rule['id']}"
                     if name not in risks:
                         continue
                     triggered = risks[name] >= rule["threshold"]
-                    level = logging.ERROR if triggered and self.definition.action_for(rule["id"]) == "block" else logging.WARNING if triggered else logging.INFO
+                    level = logging.ERROR if triggered and definition.action_for(rule["id"]) == "block" else logging.WARNING if triggered else logging.INFO
                     logger.log(level, "rule=%s message=%s backend=%s model=%s risk=%.1f%% threshold=%.1f%% result=%s action=%s",
-                               rule["id"], index, self.evaluator.name, self.evaluator.model, risks[name], rule["threshold"],
-                               "threshold reached" if triggered else "passed", self.definition.action_for(rule["id"]),
+                               rule["id"], index, evaluator.name, evaluator.model, risks[name], rule["threshold"],
+                               "threshold reached" if triggered else "passed", definition.action_for(rule["id"]),
                                extra={"rule_check": True})
             matches = [hits + extra for hits, extra in zip(matches, semantic)]
-        elif self.definition and self.definition.semantic_rules:
+        elif definition and definition.semantic_rules:
             logger.info("Semantic rules skipped: %s", "deterministic mode" if self.settings.deterministic else "deterministic block")
         rules = sorted({hit.rule_id for hits in matches for hit in hits})
         action = self.settings.policy if rules else "allow"
-        if self.definition:
-            actions = {self.definition.action_for(rule) for rule in rules}
+        if definition:
+            actions = {definition.action_for(rule) for rule in rules}
             action = next((candidate for candidate in ("block", "local", "filter", "allow") if candidate in actions), "allow")
         threshold_details = []
         for rule in semantic_rules:
@@ -141,14 +274,12 @@ class Policy:
         summary = f"action={action} rules={','.join(rules) or 'none'}"
         if threshold_details:
             summary += " | " + "; ".join(threshold_details)
-        if rules and action != "block":
-            self.runtime.violation("policy_triggered", rules)
         if action == "block":
             logger.error("%s | chat backend=none", summary)
             raise PolicyError("policy_blocked", 403, rules, risks)
         outbound = deepcopy(payload)
         replacements = {}
-        filter_matches = [[hit for hit in hits if not self.definition or self.definition.action_for(hit.rule_id) == "filter"]
+        filter_matches = [[hit for hit in hits if not definition or definition.action_for(hit.rule_id) == "filter"]
                           for hits in matches]
         if action == "filter" or (action == "local" and any(filter_matches)):
             tokens = {}
@@ -158,7 +289,7 @@ class Policy:
                 prefix += "_"
             for message, hits in zip(outbound["messages"], filter_matches):
                 text = message["content"]
-                for start, end, rule_id in reversed(self.detector.spans(hits)):
+                for start, end, rule_id in reversed(detector.spans(hits)):
                     original = text[start:end]
                     if original not in tokens:
                         token = f"[{prefix}:{rule_id}:{len(tokens) + 1}]"
@@ -179,8 +310,15 @@ class Policy:
             outbound.pop("reasoning_budget", None)
         if not key:
             raise PolicyError("missing_upstream_key", 503)
+        if definition and definition.allowed_models and outbound["model"] not in definition.allowed_models:
+            raise PolicyError("model_not_allowed", 403)
         backend = "local" if action == "local" else "fallback" if fallback else "main"
+        if rules:
+            self.runtime.violation("policy_triggered", rules, direction="input", action=action, risks=risks,
+                                   model=outbound["model"], backend=backend, client_id=client_id,
+                                   thresholds={r["id"]: r["threshold"] for r in semantic_rules if r["id"] in rules})
         logger.log(logging.WARNING if action in ("filter", "local", "redirect") else logging.INFO,
                    "%s | chat backend=%s model=%s", summary, backend, outbound["model"])
         logger.info("Generating response", extra={"progress": f"Generating response [{backend}: {outbound['model']}]"})
-        return Route(outbound, base, key, action, rules, replacements, risks=risks)
+        return Route(outbound, base, key, action, rules, replacements, risks=risks,
+                     definition=definition, detector=detector, evaluator=evaluator)

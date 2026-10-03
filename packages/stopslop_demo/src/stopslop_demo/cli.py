@@ -62,6 +62,9 @@ def main():
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--local-model")
     parser.add_argument("--local-base-url")
+    parser.add_argument("--dynamic-policy-file")
+    parser.add_argument("--incident-file")
+    parser.add_argument("--state-file")
     args = parser.parse_args()
     if args.max_tokens <= 0:
         parser.error("--max-tokens must be positive")
@@ -73,20 +76,24 @@ def main():
     try:
         settings = Settings.load(args.env_file, policy=args.policy, main_model=args.main_model, timeout=args.timeout,
                                  policy_file=args.policy_file, local_model=args.local_model, local_base_url=args.local_base_url,
-                                 deterministic=args.deterministic)
+                                 deterministic=args.deterministic, dynamic_policy_file=args.dynamic_policy_file,
+                                 incident_file=args.incident_file, state_file=args.state_file)
         if not settings.policy_file and not settings.rules_file and args.policy is None and Path("policy.json").is_file():
             settings = replace(settings, policy_file="policy.json")
         if not settings.main_key:
             parser.error("Set STOPSLOP_MAIN_KEY in .env or the environment")
         router = PolicyRouter(settings)
+        if router.policy.injected_evaluator is None:
+            from stopslop.preflight import check_semantic_setup
+            check_semantic_setup(settings)
         logger.info("Policy file=%s evaluation backend=%s", settings.policy_file or "global",
-                    "deterministic only" if settings.deterministic else "jev (" + settings.jev_model + ")")
+                    "deterministic only" if settings.deterministic else router.policy.evaluator.name + " (" + router.policy.evaluator.model + ")")
     except (ValueError, OSError) as error:
         parser.error(str(error))
     messages = [{"role": "system", "content": "You are a helpful assistant. Give concise plain-text replies, at most three short bullet points. Avoid tables and repeating prior answers."}]
     scenario = iter(SCENARIOS[args.scenario]) if args.scenario else None
     # This injection attaches policy enforcement without a server or local port.
-    with OpenAI(base_url=settings.main_base_url, api_key=settings.main_key,
+    with OpenAI(base_url=settings.main_base_url, api_key=settings.client_token or settings.main_key,
                 http_client=httpx.Client(transport=router, timeout=settings.timeout),
                 timeout=settings.timeout, max_retries=0) as client:
         if args.prompt is None and scenario is None:

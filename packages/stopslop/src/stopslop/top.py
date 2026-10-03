@@ -74,13 +74,17 @@ def budget_usage(session, budget, now):
         return (event[0] >= start if fixed else event[0] > start) and (
             not budget.get("models") or event[1] in budget["models"])
     used = sum(amount(e) for e in session.get("usage_events", []) if included(e))
-    reserved = sum(amount(e) for e in session.get("reservations", []) if included(e))
+    reserved = sum(amount(e) for e in session.get("reservations", [])
+                   if not budget.get("models") or e[1] in budget["models"])
     return used, reserved, ceiling, max(0, start + window - now) if fixed else None
 
 
 def dashboard(sessions, warnings, now=None):
     now = time.time() if now is None else now
     active = [s for s in sessions if not s.get("closed") and process_alive(s.get("pid"))]
+    scopes = {}
+    for session in sorted(active, key=lambda s: s.get("updated_at", 0)):
+        scopes[session.get("budget_scope", session.get("session_id", session.get("pid")))] = session
     summary = Table.grid(expand=True)
     for _ in range(4):
         summary.add_column(ratio=1)
@@ -92,17 +96,22 @@ def dashboard(sessions, warnings, now=None):
                     f"{sum(s.get('output_tokens', 0) for s in sessions):,} output tokens",
                     f"{sum(s.get('violation_count', 0) for s in sessions)} violations",
                     f"{sum(s.get('requests', 0) for s in sessions)} requests")
+    summary.add_row(f"{sum(s.get('assessment_calls', 0) for s in sessions)} assessments",
+                    f"{sum(s.get('assessment_failures', 0) for s in sessions)} failed assessments",
+                    "Tokens include assessment estimates",
+                    f"{sum(s.get('blocked_clients', 0) for s in scopes.values())} suspended clients")
     limits = Table(expand=True)
     for title in ("Session / limit", "Scope", "Used + reserved / cap", "Usage", "Window"):
         limits.add_column(title)
     alerts = list(warnings)
-    for s in active:
+    for s in scopes.values():
         for b in s.get("budgets", []):
             used, reserved, cap, reset = budget_usage(s, b, now)
             ratio = (used + reserved) / cap
             color = "red" if ratio >= 1 else "yellow" if ratio >= .8 else "green"
             bars = min(20, max(0, int(ratio * 20)))
-            limits.add_row(f"{s.get('pid')} / {b['id']}", b.get("tokens", "total") +
+            owner = "shared " + s["budget_scope"] if s.get("shared_state") else str(s.get("pid"))
+            limits.add_row(f"{owner} / {b['id']}", b.get("tokens", "total") +
                            (" · " + ", ".join(b["models"]) if b.get("models") else " · all models"),
                            f"{used:,} + {reserved:,} / {cap:,.0f}",
                            Text("━" * bars + "─" * (20 - bars) + f" {ratio:.0%}", style=color),
@@ -135,8 +144,18 @@ def dashboard(sessions, warnings, now=None):
                           str(s.get("in_flight", 0)) if s in active else "0",
                           Text(", ".join(f"{k}: {v}" for k, v in s.get("actions", {}).items()) or "—"),
                           f"{s.get('total_latency_seconds', 0) / count:.2f}s" if count else "—")
+    controls = Table(expand=True)
+    for title in ("Control", "Direction", "Action", "Threshold"):
+        controls.add_column(title)
+    latest = max(active, key=lambda s: s.get("updated_at", 0), default={})
+    for control in latest.get("controls", [])[:40]:
+        controls.add_row(Text(control["id"]), control["direction"], control["action"] if control.get("enabled", True) else "disabled",
+                         f"{control['threshold']:g}%" if "threshold" in control else "deterministic")
+    if not controls.row_count:
+        controls.add_row("Waiting for policy controls", "", "", "")
     return Group(Panel(summary, title="[bold cyan]slopstop-top[/] · LIVE", subtitle="Ctrl+C to quit · totals include saved sessions"),
                  Panel(processes, title="Sessions · latest 8"), Panel(limits, title="Quota usage · active sessions"),
+                 Panel(controls, title="Active controls · latest active policy · first 40"),
                  Panel(recent, title="Recent violations · latest 8"),
                  Panel(Text("\n".join(alerts) or "No warnings", style="yellow" if alerts else "green"), title="Warnings"))
 

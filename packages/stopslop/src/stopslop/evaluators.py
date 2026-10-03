@@ -17,12 +17,12 @@ class SemanticEvaluator(Protocol):
         ...
 
 
-def assessment(messages, rules, probabilities):
+def assessment(messages, rules, probabilities, target_start=0):
     """Validate every result before applying any action (percentages are 0..100)."""
     matches = [[] for _ in messages]
     risks = {}
     for index, message in enumerate(messages):
-        if not message["content"]:
+        if index < target_start or not message["content"]:
             continue
         for rule in rules:
             name = f"m{index}_{rule['id']}"
@@ -50,12 +50,15 @@ class LLMEvaluator:
         self.model = settings.main_model
         self.transport = transport
 
-    def assess(self, messages, rules):
+    def assess_targets(self, messages, rules, target_start):
+        return self.assess(messages, rules, target_start)
+
+    def assess(self, messages, rules, target_start=0):
         import json
         import httpx
 
         expected = [f"m{index}_{rule['id']}" for index, message in enumerate(messages)
-                    if message["content"] for rule in rules]
+                    if index >= target_start and message["content"] for rule in rules]
         if not expected:
             return [[] for _ in messages], {}
         payload = {
@@ -80,6 +83,6 @@ class LLMEvaluator:
                                        json=payload)
                 response.raise_for_status()
                 probabilities = json.loads(response.json()["choices"][0]["message"]["content"])
-            return assessment(messages, rules, probabilities)
+            return assessment(messages, rules, probabilities, target_start)
         except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
             raise EvaluationError("llm_unavailable") from None

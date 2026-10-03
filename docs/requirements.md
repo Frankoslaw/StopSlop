@@ -12,19 +12,24 @@ flowchart LR
     Tests[pytest and interactive demo] --> Proxy
 ```
 
-Implemented: deterministic input controls, centralized environment/rule configuration,
-block/redact/redirect/passthrough choices, safe audit metadata, positive/negative
-synthetic tests, offline upstream assertions and interactive NVIDIA demonstration.
+Implemented: deterministic and semantic input/output checks, centralized policy files,
+block/filter/local/warning actions, approved model lists, optional authenticated-client
+suspension, persistent shared token quotas, historical attack signatures, optional
+incident-to-policy generation, live policy reload, a terminal dashboard, exportable
+audit metadata, automated positive/negative tests, and an interactive NVIDIA demo.
+See [governance](governance.md) for configuration and operating limits.
 
-Deferred: semantic NDA detection, budgets, historical-exploit controls, response
-filtering, dashboard, live configuration reload, authentication and production hardening.
-This initial version does not satisfy the full challenge's hybrid-defense requirements.
+Still outside the demonstrated scope: direct MCP/tool/memory permissions, operating
+system quarantine, repository scanning, distributed quota state, financial pricing,
+and measured real-classifier accuracy. Tests mock upstreams/classifiers; no claim of
+comprehensive exploit detection or production readiness follows from passing tests.
 
 Criteria weights: robustness 30%, architecture 20%, reporting 20%, testing 15%,
 scalability 15%. Rules instead assign testing 20% and scalability 10%; retain this
 discrepancy for organizer clarification. Submission requires project/team details and
 at most ten PDF slides; rules state Oct 3 23:00 to Oct 4 23:00 as the competition window.
 
-Review checkpoints: (1) workspace/config and policy semantics, (2) rules and offline
-forwarding checks, (3) pytest results and demo verification and documented gaps. Commit after review
-at each checkpoint; do not commit `.env` or credentials.
+Review checkpoints: (1) workspace/config and policy semantics, (2) input/output and
+offline forwarding checks, (3) shared quota and client-suspension regressions, (4)
+adaptive-feed validation, positive/negative exploit cases, and documented gaps.
+Do not commit `.env`, credentials, incident feeds, or runtime control state.

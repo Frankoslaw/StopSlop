@@ -32,7 +32,7 @@ def test_monitor_accounts_reservations_model_scope_and_idle_expiry():
     assert budget_usage(session, budget, 110) == (0, 6, 20, None)
     budget.update(type="fixed_quota", reset_at="1970-01-01T00:00:00Z", limit=20)
     assert budget_usage(session, budget, 109) == (4, 6, 20, 1)
-    assert budget_usage(session, budget, 110) == (0, 0, 20, 10)
+    assert budget_usage(session, budget, 110) == (0, 6, 20, 10)
 
 
 def test_waiting_and_unreadable_snapshots_render(tmp_path):

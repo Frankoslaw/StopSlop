@@ -1,4 +1,4 @@
-"""Validated, local per-rule policy configuration. Regex rules and optional Jev semantic rules."""
+"""Validated, local per-rule policy configuration. Regex rules and optional semantic rules."""
 import json
 import re
 from importlib.resources import files
@@ -11,13 +11,41 @@ ACTIONS = {"allow", "filter", "local", "block"}
 
 
 class PolicyFile:
-    def __init__(self, path: str):
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or set(data) - {"version", "default_action", "rules", "budgets"}:
+    def __init__(self, path: str = "", *, data=None):
+        if data is None:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or set(data) - {"version", "default_action", "rules", "budgets", "classifier", "allowed_models", "output"}:
             raise ValueError("Invalid policy file fields")
         if type(data.get("version")) is not int or data["version"] != 1 or not isinstance(data.get("default_action", "block"), str) or data.get("default_action", "block") not in ACTIONS:
             raise ValueError("Policy requires version 1 and a valid default_action")
+        self.classifier = data.get("classifier")
+        if "classifier" in data and (not isinstance(self.classifier, str) or self.classifier not in ("laya", "jev", "llm")):
+            raise ValueError("classifier must be laya, jev or llm")
         self.budgets = validate_budgets(data.get("budgets", []))
+        self.allowed_models = data.get("allowed_models")
+        if "allowed_models" in data and (not isinstance(self.allowed_models, list) or not self.allowed_models
+                or any(not isinstance(m, str) or not m for m in self.allowed_models)):
+            raise ValueError("allowed_models must be a nonempty array of model names")
+        output = data.get("output", {})
+        if (not isinstance(output, dict) or set(output) - {"inherit_input", "default_action", "rules"}
+                or type(output.get("inherit_input", True)) is not bool
+                or not isinstance(output.get("default_action", "block"), str)
+                or output.get("default_action", "block") not in {"block", "block_device", "warn"}
+                or not isinstance(output.get("rules", []), list)):
+            raise ValueError("Invalid output policy")
+        self.output_inherit = output.get("inherit_input", True)
+        self.output_default = output.get("default_action", "block")
+        self.output_actions = {}
+        output_entries = []
+        for entry in output.get("rules", []):
+            if (not isinstance(entry, dict) or not isinstance(entry.get("action", self.output_default), str)
+                    or entry.get("action", self.output_default) not in {"block", "block_device", "warn", "filter", "allow"}
+                    or not isinstance(entry.get("id"), str) or not re.fullmatch(r"[a-z][a-z0-9_]*", entry["id"])):
+                raise ValueError("Invalid output rule action")
+            if entry.get("id") in self.output_actions:
+                raise ValueError("Duplicate output rule ID")
+            self.output_actions[entry.get("id")] = entry.get("action", self.output_default)
+            output_entries.append({**entry, "action": "block"})
         entries = data.get("rules", [])
         if not isinstance(entries, list):
             raise ValueError("Policy rules must be an array")
@@ -67,6 +95,14 @@ class PolicyFile:
             self.detector = Detector(definitions=list(definitions.values()))
         except (re.error, TypeError, KeyError) as error:
             raise ValueError("Invalid policy pattern") from error
+        # Existing input rule IDs may be overridden on output without repeating their definition.
+        inherited = {entry["id"]: entry for entry in entries}
+        expanded = []
+        for entry in output_entries:
+            if set(entry) <= {"id", "action"} and entry.get("id") in inherited:
+                entry = {**inherited[entry["id"]], "action": "block"}
+            expanded.append(entry)
+        self.output_definition = PolicyFile(data={"version": 1, "rules": expanded}) if output_entries else None
 
     def scan(self, text, on_rule=None):
         # An exception applies only to a fully contained match of its own rule.

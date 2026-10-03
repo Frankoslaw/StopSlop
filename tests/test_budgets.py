@@ -74,7 +74,7 @@ def test_proxy_budget_metrics_and_model_forwarding(tmp_path):
     from stopslop.config import Settings
     from stopslop.proxy import create_app
     policy = tmp_path / "policy.json"
-    policy.write_text(json.dumps({"version": 1, "rules": [], "budgets": [
+    policy.write_text(json.dumps({"version": 1, "rules": [], "allowed_models": ["client-model"], "budgets": [
         dict(id="output", type="fixed_quota", tokens="output", limit=10,
              window_seconds=86400, reset_at="2026-01-01T00:00:00Z")]}))
     calls = []

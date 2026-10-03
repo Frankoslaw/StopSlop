@@ -4,8 +4,12 @@ version = "0.1.0"
 description = "Deterministic OpenAI-compatible privacy proxy"
 requires-python = ">=3.14"
 dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.28", "python-dotenv>=1", "structlog>=25", "rich>=13"]
+[project.optional-dependencies]
+laya = ["laya>=0.3.20"]
+
 [project.scripts]
 stopslop = "stopslop.cli:main"
+stopslop-policy = "stopslop.adapt:main"
 slopstop-top = "stopslop.top:main"
 stopslop-top = "stopslop.top:main"
 [build-system]

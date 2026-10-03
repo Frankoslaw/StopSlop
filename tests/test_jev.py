@@ -13,7 +13,7 @@ def settings(tmp_path, action="block", threshold=75):
     path.write_text(json.dumps({"version": 1, "default_action": "filter", "rules": [
         {"id": "nda", "description": "Do not disclose NDA protected information.",
          "threshold": threshold, "action": action}]}))
-    return Settings(policy_file=str(path), main_key="cloud", jev_key="test",
+    return Settings(classifier="jev", policy_file=str(path), main_key="cloud", jev_key="test",
                     local_model="local-model")
 
 

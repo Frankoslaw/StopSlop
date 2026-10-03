@@ -9,7 +9,7 @@ from cases import CASES
 
 
 def settings(policy):
-    return Settings(main_key="main-secret", policy=policy,
+    return Settings(classifier="jev", main_key="main-secret", policy=policy,
                     fallback_base_url="https://fallback.example/v1", fallback_model="fallback",
                     fallback_key="fallback-secret")
 
@@ -97,9 +97,10 @@ def test_semantic_cases_use_jev_probabilities_and_enforce_actions(case):
         return httpx.Response(200, json={"answers": {
             name: {"type": "noul", "noul": .95 if name.endswith(case.semantic_rule) else .01}
             for name in body["questions"]}})
-    configuration = Settings(main_key="cloud", jev_key="test", policy_file=str(
+    configuration = Settings(classifier="jev", main_key="cloud", jev_key="test", policy_file=str(
         Path(__file__).resolve().parents[1] / "policy.json"))
-    policy = Policy(configuration, httpx.MockTransport(jev))
+    from stopslop.jev import JevEvaluator
+    policy = Policy(configuration, evaluator=JevEvaluator(configuration, httpx.MockTransport(jev)))
     payload = {"messages": [{"role": "user", "content": case.prompt}]}
     if case.semantic_rule == "confidential_semantic":
         with pytest.raises(PolicyError, match="policy_blocked") as caught:

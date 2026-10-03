@@ -7,12 +7,13 @@ import pytest
 
 from stopslop.config import Settings
 from stopslop.router import PolicyRouter
+from stopslop.jev import JevEvaluator
 from stopslop_demo.scenarios import SCENARIOS
 from stopslop_demo.spinner import Spinner
 
 
 def config():
-    return Settings(main_key="mock", jev_key="mock", policy_file=str(
+    return Settings(metrics_file="", classifier="jev", main_key="mock", jev_key="mock", policy_file=str(
         Path(__file__).resolve().parents[1] / "policy.json"))
 
 
@@ -42,14 +43,14 @@ def test_scenario_runs_sequentially_and_every_run_calls_backends(tmp_path, monke
         return httpx.Response(200, json=completion())
     settings = config()
     monkeypatch.setattr(cli.Settings, "load", lambda *a, **k: settings)
-    monkeypatch.setattr(cli, "PolicyRouter", lambda s: PolicyRouter(s, httpx.MockTransport(upstream), httpx.MockTransport(jev)))
+    monkeypatch.setattr(cli, "PolicyRouter", lambda s: PolicyRouter(s, httpx.MockTransport(upstream), evaluator=JevEvaluator(s, httpx.MockTransport(jev))))
     monkeypatch.setattr("sys.argv", ["stopslop-demo", "--scenario", "--color", "never"])
     cli.main()
     assert [len(body["messages"]) for body in calls] == [2, 4, 6]
     assert "[ANON:personal_name:" in calls[-1]["messages"][-1]["content"]
-    assert len(assessments) == 4
+    assert len(assessments) == 7  # Four inputs and three generated replies.
     cli.main()
-    assert len(calls) == 6 and len(assessments) == 8
+    assert len(calls) == 6 and len(assessments) == 14
     output = capsys.readouterr()
     assert "Scenario complete" in output.err
     assert "confidential_semantic" in output.err and "action=block" in output.err

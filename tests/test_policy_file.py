@@ -66,6 +66,9 @@ def test_allowed_exceptions_are_scoped_and_custom_rules_block(tmp_path):
 @pytest.mark.parametrize("failure", [False, True])
 def test_local_routing_mixed_filter_and_no_cloud_fallback(tmp_path, kind, failure):
     settings = configuration(tmp_path, [{"id": "profanity", "action": "local"}], local_model="small-local")
+    definition = json.loads(Path(settings.policy_file).read_text())
+    definition["output"] = {"rules": [{"id": "profanity", "action": "warn"}]}
+    Path(settings.policy_file).write_text(json.dumps(definition))
     calls = []
     def upstream(request):
         calls.append(request)
