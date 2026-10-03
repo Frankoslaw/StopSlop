@@ -13,7 +13,7 @@ from stopslop_demo.spinner import Spinner
 
 
 def config():
-    return Settings(classifier="jev", main_key="mock", jev_key="mock", policy_file=str(
+    return Settings(classifier="jev", key="mock", jev_key="mock", policy_file=str(
         Path(__file__).resolve().parents[1] / "policy.toml"))
 
 
@@ -141,9 +141,9 @@ def test_scenario_retries_only_transient_chat_errors(monkeypatch):
         return httpx.Response(503, text="Temporarily unavailable") if len(calls) == 1 else httpx.Response(200, json=completion())
     settings = replace(config(), deterministic=True)
     monkeypatch.setattr(cli.time, "sleep", lambda delay: None)
-    with OpenAI(base_url=settings.main_base_url, api_key=settings.main_key, max_retries=0,
+    with OpenAI(base_url=settings.base_url, api_key=settings.key, max_retries=0,
                 http_client=httpx.Client(transport=PolicyRouter(settings, httpx.MockTransport(upstream)))) as client:
-        assert cli.chat(client, settings.main_model, [{"role": "user", "content": "Hello"}], retries=2) == "Agenda updated."
+        assert cli.chat(client, settings.model, [{"role": "user", "content": "Hello"}], retries=2) == "Agenda updated."
     assert len(calls) == 2 and calls[0] == calls[1]
 
 
@@ -162,10 +162,10 @@ def test_scenario_never_retries_policy_evaluator_or_quota_failure(monkeypatch, k
         pytest.fail("Unexpected retry")
     monkeypatch.setattr(cli.time, "sleep", sleep)
     settings = config()
-    with OpenAI(base_url=settings.main_base_url, api_key=settings.main_key, max_retries=0,
+    with OpenAI(base_url=settings.base_url, api_key=settings.key, max_retries=0,
                 http_client=httpx.Client(transport=httpx.MockTransport(upstream))) as client:
         with pytest.raises(APIStatusError):
-            cli.chat(client, settings.main_model, [{"role": "user", "content": "Hello"}], retries=2)
+            cli.chat(client, settings.model, [{"role": "user", "content": "Hello"}], retries=2)
     assert len(calls) == 1
 
 

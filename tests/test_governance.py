@@ -8,7 +8,7 @@ import pytest
 
 from stopslop.config import Settings
 from stopslop.policy import Policy, PolicyError
-from stopslop.proxy import create_app
+from stopslop_proxy import create_app
 from stopslop.router import PolicyRouter
 from stopslop.runtime import Runtime
 from stopslop.repository import SQLiteRepository
@@ -19,7 +19,7 @@ def configuration(tmp_path, **policy_fields):
     path = tmp_path / "policy.json"
     path.write_text(json.dumps({"version": 1, "default_action": "filter", "rules": [
         {"id": "secret", "action": "block"}], **policy_fields}))
-    return Settings(main_key="upstream-secret", policy_file=str(path), deterministic=True )
+    return Settings(key="upstream-secret", policy_file=str(path), deterministic=True )
 
 
 def payload(text="Hello", model=None):
@@ -147,7 +147,7 @@ def test_semantic_output_uses_conversation_context_but_only_new_matches(tmp_path
 
 
 def test_model_allowlist_applies_to_client_and_policy_routes(tmp_path):
-    settings = replace(configuration(tmp_path, allowed_models=["approved"]), preserve_model=True, main_model="approved")
+    settings = replace(configuration(tmp_path, allowed_models=["approved"]), preserve_model=True, model="approved")
     policy = Policy(settings)
     with pytest.raises(PolicyError, match="model_not_allowed"):
         policy.route(payload(model="expensive-unapproved"))

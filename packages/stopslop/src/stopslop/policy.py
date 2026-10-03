@@ -82,7 +82,7 @@ class Policy:
             if settings.rules_file:
                 raise ValueError("Use policy_file or rules_file, not both")
             self.detector = self.definition.detector
-        classifier = (self.definition.classifier if self.definition else None) or settings.classifier
+        classifier = settings.classifier
         if settings.deterministic:
             self.evaluator = None
         elif evaluator is not None:
@@ -180,9 +180,9 @@ class Policy:
         if not definition or not (definition.semantic_rules or
                 (definition.output_definition and definition.output_definition.semantic_rules)):
             return
-        classifiers = {(definition.classifier or self.settings.classifier)}
-        if definition.budget_fallback and definition.budget_fallback.get("classifier"):
-            classifiers.add(definition.budget_fallback["classifier"])
+        classifiers = {self.settings.classifier}
+        if definition.budget_fallback and self.settings.fallback_classifier:
+            classifiers.add(self.settings.fallback_classifier)
         for classifier in classifiers:
             if classifier == "laya":
                 self.evaluator_for(classifier).prepare()
@@ -225,8 +225,8 @@ class Policy:
         payload["model"] = model
         payload.pop("reasoning_budget", None)
         evaluator = route.evaluator
-        if definition.budget_fallback.get("classifier"):
-            evaluator = self.evaluator_for(definition.budget_fallback["classifier"])
+        if self.settings.fallback_classifier:
+            evaluator = self.evaluator_for(self.settings.fallback_classifier)
         return replace(route, payload=payload, base_url=base, key=key, evaluator=evaluator, budget_fallback=target)
 
     def inspect_output(self, route, body):
@@ -262,7 +262,7 @@ class Policy:
                 # When assessment admission failed, re-run all checks with the explicitly configured classifier.
                 assessment_failed = route is None
                 if assessment_failed:
-                    if not definition.budget_fallback.get("classifier"):
+                    if not self.settings.fallback_classifier:
                         raise
                     route = self._route(payload, definition, client_id, fallback_assessment=True)
                 route = self.fallback_route(route, definition, allow_same_model=assessment_failed)
@@ -297,9 +297,9 @@ class Policy:
 
     def _route(self, payload, definition=None, client_id="", fallback_assessment=False) -> Route:
         detector = definition.detector if definition else self.detector
-        classifier = (definition.classifier if definition else None) or self.settings.classifier
+        classifier = self.settings.classifier
         if fallback_assessment:
-            classifier = definition.budget_fallback["classifier"]
+            classifier = self.settings.fallback_classifier
         evaluator = self.injected_evaluator
         if fallback_assessment:
             evaluator = self.evaluator_for(classifier)
@@ -330,8 +330,8 @@ class Policy:
         if "max_tokens" in payload and (type(payload["max_tokens"]) is not int or payload["max_tokens"] <= 0):
             raise PolicyError("invalid_max_tokens", 400)
         if self.settings.preserve_model:
-            allowed_models = definition.allowed_models if definition and definition.allowed_models else [self.settings.main_model]
-            if payload.get("model", self.settings.main_model) not in allowed_models:
+            allowed_models = definition.allowed_models if definition and definition.allowed_models else [self.settings.model]
+            if payload.get("model", self.settings.model) not in allowed_models:
                 raise PolicyError("model_not_allowed", 403)
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages or len(messages) > 1024 or any(
@@ -421,9 +421,9 @@ class Policy:
                 message["content"] = text
         fallback = action == "redirect"
         settings = self.settings
-        base = settings.fallback_base_url if fallback else settings.main_base_url
-        key = settings.fallback_key if fallback else settings.main_key
-        outbound["model"] = settings.fallback_model if fallback else (payload.get("model", settings.main_model) if settings.preserve_model else settings.main_model)
+        base = settings.fallback_base_url if fallback else settings.base_url
+        key = settings.fallback_key if fallback else settings.key
+        outbound["model"] = settings.fallback_model if fallback else (payload.get("model", settings.model) if settings.preserve_model else settings.model)
         if action == "local":
             if not settings.local_model:
                 raise PolicyError("missing_local_model", 503, rules)

@@ -13,7 +13,7 @@ def settings(tmp_path, action="block", threshold=75):
     path.write_text(json.dumps({"version": 1, "default_action": "filter", "rules": [
         {"id": "nda", "description": "Do not disclose NDA protected information.",
          "threshold": threshold, "action": action}]}))
-    return Settings(classifier="jev", policy_file=str(path), main_key="cloud", jev_key="test",
+    return Settings(classifier="jev", policy_file=str(path), key="cloud", jev_key="test",
                     local_model="local-model")
 
 
@@ -127,7 +127,7 @@ def test_llm_adapter_can_replace_jev_without_jev_key(tmp_path):
         assert request.url.host == "integrate.api.nvidia.com"
         assert request.headers["Authorization"] == "Bearer cloud"
         body = json.loads(request.content)
-        assert body["model"] == config.main_model and body["reasoning_budget"] == 0
+        assert body["model"] == config.model and body["reasoning_budget"] == 0
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"m0_nda":0.9}'}}]})
     route = Policy(config, evaluator=LLMEvaluator(config, httpx.MockTransport(respond))).route(payload())
     assert route.action == "filter" and route.risks == {"m0_nda": 90}

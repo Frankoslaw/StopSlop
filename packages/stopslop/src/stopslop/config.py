@@ -1,35 +1,36 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import json
 import math
 from urllib.parse import urlsplit
 import ipaddress
+import argparse
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 POLICIES = ("block", "redirect", "filter", "passthrough")
 
 @dataclass(frozen=True)
 class Settings:
-    main_provider: str = "nvidia"
-    main_base_url: str | None = None
-    main_model: str | None = None
-    main_key: str = ""
+    provider: str = "nvidia"
+    base_url: str | None = None
+    model: str | None = None
+    key: str = field(default="", repr=False)
     policy: str = "block"
     fallback_base_url: str = ""
     fallback_model: str = ""
-    fallback_key: str = ""
+    fallback_key: str = field(default="", repr=False)
     rules_file: str = ""
     policy_file: str = ""
     local_base_url: str = "http://127.0.0.1:11434/v1"
     local_model: str = ""
-    local_key: str = "local"
+    local_key: str = field(default="local", repr=False)
     deterministic: bool = False
     classifier: str = "laya"
-    classifier_override: str = ""
+    fallback_classifier: str = ""
     laya_model: str = "convaiinnovations/laya"
     laya_device: str = "cpu"
-    jev_key: str = ""
+    jev_key: str = field(default="", repr=False)
     jev_base_url: str = "https://api.typesafe.ai/v1"
     jev_model: str = "jev-latest"
     preserve_model: bool = False
@@ -37,8 +38,8 @@ class Settings:
     log_chats: bool = True
     max_request_bytes: int = 2097152
     max_response_bytes: int = 4194304
-    access_tokens: str = ""
-    client_token: str = ""
+    access_tokens: str = field(default="", repr=False)
+    client_token: str = field(default="", repr=False)
     dynamic_policy_file: str = ""
     timeout: float = 120.0
 
@@ -48,20 +49,20 @@ class Settings:
             "openai": ("https://api.openai.com/v1", "gpt-4.1-mini"),
             "ollama": ("http://127.0.0.1:11434/v1", None),
         }
-        if self.main_provider not in providers:
-            raise ValueError("main_provider must be nvidia, openai or ollama")
-        base_url, model = providers[self.main_provider]
-        object.__setattr__(self, "main_base_url", self.main_base_url or base_url)
-        object.__setattr__(self, "main_model", self.main_model or model)
-        if not self.main_model:
-            raise ValueError("ollama requires main_model matching an installed model")
-        if self.main_provider == "ollama" and not self.main_key:
-            object.__setattr__(self, "main_key", "ollama")
+        if self.provider not in providers:
+            raise ValueError("provider must be nvidia, openai or ollama")
+        base_url, model = providers[self.provider]
+        object.__setattr__(self, "base_url", self.base_url or base_url)
+        object.__setattr__(self, "model", self.model or model)
+        if not self.model:
+            raise ValueError("ollama requires model matching an installed model")
+        if self.provider == "ollama" and not self.key:
+            object.__setattr__(self, "key", "ollama")
         for name in ("max_request_bytes", "max_response_bytes"):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if self.classifier_override and self.classifier_override not in ("laya", "jev", "llm"):
-            raise ValueError("classifier_override must be laya, jev or llm")
+        if self.fallback_classifier and self.fallback_classifier not in ("laya", "jev", "llm"):
+            raise ValueError("fallback_classifier must be laya, jev or llm")
         if self.classifier not in ("laya", "jev", "llm"):
             raise ValueError("classifier must be laya, jev or llm")
         if self.policy not in POLICIES:
@@ -86,10 +87,12 @@ class Settings:
 
     @classmethod
     def load(cls, env_file: str = ".env", **overrides):
-        load_dotenv(Path(env_file), override=False)
+        environment = {**dotenv_values(Path(env_file)), **os.environ}
         values = {}
         for name in cls.__dataclass_fields__:
-            value = os.getenv("STOPSLOP_" + name.upper())
+            if overrides.get(name) is not None:
+                continue
+            value = environment.get("STOPSLOP_" + name.upper())
             if value is not None:
                 if name in ("deterministic", "preserve_model", "log_chats"):
                     if value.lower() not in ("true", "false", "1", "0"):
@@ -98,10 +101,47 @@ class Settings:
                 else:
                     values[name] = (float(value) if name == "timeout" else int(value)
                                     if name in ("max_request_bytes", "max_response_bytes") else value)
-        provider = overrides.get("main_provider") or values.get("main_provider", "nvidia")
-        for field in ("base_url", "model", "key"):
-            value = os.getenv(f"STOPSLOP_{provider.upper()}_{field.upper()}")
-            if value:
-                values["main_" + field] = value
         values.update({k: v for k, v in overrides.items() if v is not None})
+        if not values.get("policy_file") and not values.get("rules_file") and "policy" not in values and Path("policy.toml").is_file():
+            values["policy_file"] = "policy.toml"
         return cls(**values)
+
+
+def add_settings_arguments(parser):
+    """One flag per runtime setting; None lets environment/default values apply."""
+    parser.add_argument("--env-file", default=".env")
+    choices = {"provider": ("nvidia", "openai", "ollama"), "policy": POLICIES,
+               "classifier": ("laya", "jev", "llm"), "fallback_classifier": ("laya", "jev", "llm")}
+    groups = {
+        "upstream": parser.add_argument_group("Upstream provider"),
+        "enforcement": parser.add_argument_group("Policy and assessment"),
+        "fallback": parser.add_argument_group("Optional fallback routes"),
+        "runtime": parser.add_argument_group("State, authentication and limits"),
+    }
+    help_text = {
+        "provider": "Select upstream; explicit URL/model/key still apply",
+        "key": "Upstream credential (prefer STOPSLOP_KEY)",
+        "policy_file": "Enforcement policy (auto-discovers policy.toml)",
+        "classifier": "Semantic assessment backend, configured outside policy",
+        "fallback_classifier": "Optional assessment backend on budget exhaustion",
+        "policy": "Built-in detector mode when no policy file is configured",
+        "rules_file": "Custom detector catalog; cannot be combined with policy-file",
+        "deterministic": "Skip semantic checks; keep deterministic enforcement",
+        "preserve_model": "Honor client model selection within policy approvals",
+        "log_chats": "Record original inputs and delivered replies (default: enabled)",
+        "state_file": "SQLite database shared with dashboard and administration",
+    }
+    for name in Settings.__dataclass_fields__:
+        group = ("upstream" if name in ("provider", "base_url", "model", "key") else
+                 "fallback" if name.startswith(("fallback_", "local_")) else
+                 "enforcement" if name.startswith(("laya_", "jev_")) or name in
+                 ("policy", "policy_file", "rules_file", "classifier", "deterministic", "dynamic_policy_file") else "runtime")
+        target = groups[group]
+        flag = "--" + name.replace("_", "-")
+        description = help_text.get(name, "Configure " + name.replace("_", " "))
+        description += " (STOPSLOP_" + name.upper() + ")"
+        if name in ("deterministic", "preserve_model", "log_chats"):
+            target.add_argument(flag, action=argparse.BooleanOptionalAction, default=None, help=description)
+        else:
+            value_type = float if name == "timeout" else int if name in ("max_request_bytes", "max_response_bytes") else str
+            target.add_argument(flag, type=value_type, choices=choices.get(name), default=None, help=description)

@@ -1,5 +1,9 @@
 # Governance and operating limits
 
+## Configuration boundary
+
+The `stopslop` package owns policy enforcement and persistence. `stopslop-proxy` owns the HTTP gateway and server dependencies; demo and dashboard packages remain independent. Runtime options use one Settings schema and shared gateway/demo flags. Precedence is flags > process environment > dotenv file > defaults. Provider settings are `STOPSLOP_PROVIDER`, `STOPSLOP_BASE_URL`, `STOPSLOP_MODEL`, `STOPSLOP_KEY`; provider-specific environment variables are not read. Policy files reject classifier fields, including inside budget fallback. Choose assessment backends at process startup; policy reload only changes enforcement decisions.
+
 ## Enforcement
 
 `policy.toml` uses `type = "builtin.email"` and other `builtin.` detector types for built-ins (including regex detectors) and generic `type = "regex"`/`"semantic"` rules with optional names. Legacy IDs remain supported internally and on import. It provides deterministic and semantic rules, output policies, approved models, token budgets and agent operation permissions. Configuration reload is validated before admission. In-flight input/output checks and all their quota reservations use the admitted policy snapshot, including semantic output assessments.
@@ -22,7 +26,7 @@ Input reservations estimate UTF-8 bytes plus per-message overhead; output reserv
 
 Model-scoped limits can set `on_exhaustion = "fallback"` and use `[budget_fallback] route = "local"` or `"fallback"`. Local uses the configured loopback model; fallback uses the configured trusted provider. Models must remain approved. Admission retries once against every original budget, so global limits and fallback quotas cannot be bypassed. Input filtering and output protection remain enabled; local-only rules cannot become cloud requests. Budget decisions precede generation; provider errors never initiate another model call.
 
-The optional `classifier` in `budget_fallback` explicitly selects semantic assessment when a paid evaluator is quota-bound, including generated-output assessment. Missing classifiers and invalid assessments fail closed. Quota snapshots remain fixed for each admitted request. Usage is recorded for the actual destination and assessment models. The shipped policy scopes its daily limit to the main model and enables a local fallback; operators must configure that installed local model. Add an unscoped hard cap if total usage must remain bounded across every model.
+The optional runtime `STOPSLOP_FALLBACK_CLASSIFIER` / `--fallback-classifier` selects semantic assessment when a paid evaluator is quota-bound, including generated-output assessment. Missing classifiers and invalid assessments fail closed. Quota snapshots remain fixed for each admitted request. Usage is recorded for the actual destination and assessment models. The shipped policy scopes its daily limit to the main model and enables a local fallback; operators must configure that installed local model. Add an unscoped hard cap if total usage must remain bounded across every model.
 
 ## Agent tool, MCP and memory access
 

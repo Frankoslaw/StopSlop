@@ -12,7 +12,7 @@ from stopslop.evaluators import assessment
 from stopslop.policy import Policy, PolicyError
 from stopslop.policy_file import PolicyFile
 from stopslop.policy_format import policy_toml, read_policy
-from stopslop.proxy import create_app
+from stopslop_proxy import create_app
 from stopslop.router import PolicyRouter
 from stopslop.policy_schema import BUILTIN_TYPES
 
@@ -35,7 +35,7 @@ def settings(tmp_path, route="fallback", **fields):
     data = dict(version=1, default_action="filter", rules=[dict(type="email", action="filter")],
                 budgets=[budget()], allowed_models=["main", "cheap", "free"], budget_fallback=dict(route=route)) | fields
     path.write_text(policy_toml(data), encoding="utf-8")
-    return Settings(main_key="main-key", main_model="main", deterministic=True, policy_file=str(path),
+    return Settings(key="main-key", model="main", deterministic=True, policy_file=str(path),
                     state_file=str(tmp_path / "state.sqlite3"), fallback_base_url="https://cheap.example/v1",
                     fallback_model="cheap", fallback_key="cheap-key", local_model="free")
 
@@ -91,7 +91,7 @@ def test_typed_output_override_and_toml_export(tmp_path):
     assert "id =" not in text
     path = tmp_path / "policy.toml"
     path.write_text(text, encoding="utf-8")
-    policy = Policy(Settings(main_key="key", deterministic=True, policy_file=str(path)))
+    policy = Policy(Settings(key="key", deterministic=True, policy_file=str(path)))
     route = policy.route(payload())
     with pytest.raises(PolicyError, match="output_blocked"):
         policy.inspect_output(route, response("restricted"))
@@ -221,8 +221,8 @@ def test_fallback_generated_secrets_are_withheld(tmp_path, transport):
 
 def test_semantic_budget_fallback_keeps_all_checks(tmp_path):
     rules = [dict(type="semantic", name="confidential", description="Block confidential content.", action="block")]
-    config = replace(settings(tmp_path, rules=rules, classifier="llm", budget_fallback=dict(route="local", classifier="laya")),
-                     deterministic=False)
+    config = replace(settings(tmp_path, rules=rules, budget_fallback=dict(route="local")),
+                     deterministic=False, classifier="llm", fallback_classifier="laya")
     calls = []
 
     class LocalEvaluator:
@@ -246,8 +246,8 @@ def test_semantic_budget_fallback_keeps_all_checks(tmp_path):
 
 def test_output_semantics_use_local_classifier_when_paid_quota_exhausts(tmp_path):
     rules = [dict(type="semantic", name="confidential", description="Block confidential content.", action="block")]
-    config = replace(settings(tmp_path, rules=rules, classifier="llm", budget_fallback=dict(route="local", classifier="laya")),
-                     deterministic=False)
+    config = replace(settings(tmp_path, rules=rules, budget_fallback=dict(route="local")),
+                     deterministic=False, classifier="llm", fallback_classifier="laya")
 
     class LocalEvaluator:
         name, model = "laya", "classifier"

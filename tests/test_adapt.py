@@ -17,7 +17,7 @@ def fixture(tmp_path):
     base.write_text(json.dumps({"version": 1, "default_action": "filter", "rules": []}))
     incidents = tmp_path / "state.sqlite3"
     record_incident(incidents, "code_execution", ["shell_execution"])
-    return base, incidents, Settings(main_key="mock", deterministic=True, policy_file=str(base), state_file=str(incidents))
+    return base, incidents, Settings(key="mock", deterministic=True, policy_file=str(base), state_file=str(incidents))
 
 
 def response(data):
@@ -90,7 +90,7 @@ def test_incident_generation_sends_metadata_not_payloads(tmp_path):
         calls.append(text)
         assert "password=private" not in text and "sensitive text" not in text
         body = json.loads(text)
-        assert body["model"] == settings.main_model and body["max_tokens"] == 2048
+        assert body["model"] == settings.model and body["max_tokens"] == 2048
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"version": 1, "rules": [
             {"id": "dyn_leak", "description": "Block unauthorized disclosure of personal contact details.", "action": "block"}]})}}]})
     generate_policy(settings, base, tmp_path / "policy.dyn.toml", httpx.MockTransport(backend))
@@ -116,7 +116,7 @@ def test_dynamic_overlay_cannot_weaken_base_or_replace_builtins():
     "os.system(command_from_remote_model)",
 ])
 def test_shipped_historical_signatures_block_without_execution(text):
-    policy = Policy(Settings(main_key="mock", deterministic=True, policy_file=str(Path(__file__).resolve().parents[1] / "policy.toml")))
+    policy = Policy(Settings(key="mock", deterministic=True, policy_file=str(Path(__file__).resolve().parents[1] / "policy.toml")))
     with pytest.raises(PolicyError, match="policy_blocked"):
         policy.route({"messages": [{"role": "user", "content": text}]})
 
@@ -124,7 +124,7 @@ def test_shipped_historical_signatures_block_without_execution(text):
 @pytest.mark.parametrize("text", ["Explain why untrusted deserialization is risky.",
                                       "Describe how to prevent prompt injection.", "Summarize a public security advisory."])
 def test_shipped_exploit_controls_allow_benign_discussion(text):
-    policy = Policy(Settings(main_key="mock", deterministic=True, policy_file=str(Path(__file__).resolve().parents[1] / "policy.toml")))
+    policy = Policy(Settings(key="mock", deterministic=True, policy_file=str(Path(__file__).resolve().parents[1] / "policy.toml")))
     assert policy.route({"messages": [{"role": "user", "content": text}]}).action == "allow"
 
 

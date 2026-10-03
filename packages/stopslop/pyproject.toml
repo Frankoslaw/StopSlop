@@ -1,14 +1,13 @@
 [project]
 name = "stopslop"
 version = "0.1.0"
-description = "Deterministic OpenAI-compatible privacy proxy"
+description = "Privacy, security and governance policy engine"
 requires-python = ">=3.14"
-dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.28", "python-dotenv>=1", "structlog>=25", "regex>=2024.11.6"]
+dependencies = ["httpx>=0.28", "python-dotenv>=1", "structlog>=25", "regex>=2024.11.6"]
 [project.optional-dependencies]
 laya = ["laya>=0.3.20"]
 
 [project.scripts]
-stopslop = "stopslop.cli:main"
 stopslop-policy = "stopslop.adapt:main"
 [build-system]
 requires = ["uv_build>=0.12.22,<0.13"]

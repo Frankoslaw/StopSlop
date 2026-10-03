@@ -47,7 +47,7 @@ class LLMEvaluator:
 
     def __init__(self, settings, transport=None):
         self.settings = settings
-        self.model = settings.main_model
+        self.model = settings.model
         self.transport = transport
 
     def assess_targets(self, messages, rules, target_start):
@@ -78,8 +78,8 @@ class LLMEvaluator:
         try:
             with httpx.Client(transport=self.transport, timeout=self.settings.timeout,
                               follow_redirects=False) as client:
-                response = client.post(self.settings.main_base_url.rstrip("/") + "/chat/completions",
-                                       headers={"Authorization": f"Bearer {self.settings.main_key}"},
+                response = client.post(self.settings.base_url.rstrip("/") + "/chat/completions",
+                                       headers={"Authorization": f"Bearer {self.settings.key}"},
                                        json=payload)
                 response.raise_for_status()
                 probabilities = json.loads(response.json()["choices"][0]["message"]["content"])

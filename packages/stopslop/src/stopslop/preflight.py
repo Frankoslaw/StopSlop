@@ -19,11 +19,14 @@ def check_semantic_setup(settings):
     if not definition or not (definition.semantic_rules or
                              (definition.output_definition and definition.output_definition.semantic_rules)):
         return
-    classifier = definition.classifier or settings.classifier
-    if classifier == "laya" and "laya" not in sys.modules and importlib.util.find_spec("laya") is None:
-        raise ValueError("Laya is not installed. Run uv sync --all-packages --extra laya, "
-                         "select classifier llm/jev in the policy file, or explicitly use --deterministic")
-    if classifier == "jev" and not settings.jev_key:
-        raise ValueError("Semantic policies require STOPSLOP_JEV_KEY")
-    if classifier == "llm" and not settings.main_key:
-        raise ValueError("LLM assessment requires STOPSLOP_MAIN_KEY")
+    classifiers = {settings.classifier}
+    if definition.budget_fallback and settings.fallback_classifier:
+        classifiers.add(settings.fallback_classifier)
+    for classifier in classifiers:
+        if classifier == "laya" and "laya" not in sys.modules and importlib.util.find_spec("laya") is None:
+            raise ValueError("Laya is not installed. Run uv sync --all-packages --extra laya, "
+                             "select --classifier llm/jev, or explicitly use --deterministic")
+        if classifier == "jev" and not settings.jev_key:
+            raise ValueError("Semantic policies require STOPSLOP_JEV_KEY")
+        if classifier == "llm" and not settings.key:
+            raise ValueError("LLM assessment requires STOPSLOP_KEY")

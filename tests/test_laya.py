@@ -12,11 +12,9 @@ from stopslop.policy_file import PolicyFile
 
 def configuration(tmp_path, classifier=None):
     data = {"version": 1, "rules": [{"id": "nda", "description": "Do not disclose NDA information.", "threshold": 75, "action": "block"}]}
-    if classifier is not None:
-        data["classifier"] = classifier
     path = tmp_path / "policy.json"
     path.write_text(json.dumps(data))
-    return Settings(main_key="mock", policy_file=str(path))
+    return Settings(key="mock", policy_file=str(path), classifier=classifier if classifier is not None else "laya")
 
 
 def test_local_default_lazy_load_and_reuse(tmp_path, monkeypatch):
@@ -45,20 +43,20 @@ def test_local_invalid_output_fails_closed(tmp_path, monkeypatch, answer):
         Policy(configuration(tmp_path)).route({"messages": [{"role": "user", "content": "NDA details"}]})
 
 
-def test_policy_classifier_selects_jev(tmp_path):
+def test_runtime_classifier_selects_jev(tmp_path):
     from dataclasses import replace
     from stopslop.jev import JevEvaluator
     config = configuration(tmp_path, "jev")
     with pytest.raises(ValueError, match="STOPSLOP_JEV_KEY"):
         Policy(config)
     assert isinstance(Policy(replace(config, jev_key="test")).evaluator, JevEvaluator)
-    assert isinstance(Policy(replace(configuration(tmp_path, "laya"), classifier="jev")).evaluator, LayaEvaluator)
+    assert isinstance(Policy(replace(configuration(tmp_path, "jev"), classifier="laya")).evaluator, LayaEvaluator)
 
 
 @pytest.mark.parametrize("classifier", ["unknown", 1, {}, [], False])
 def test_invalid_classifier(tmp_path, classifier):
     with pytest.raises(ValueError, match="classifier"):
-        PolicyFile(configuration(tmp_path, classifier).policy_file)
+        configuration(tmp_path, classifier)
 
 
 def test_local_load_failure_is_closed(tmp_path, monkeypatch):
@@ -100,10 +98,11 @@ def test_prepare_includes_laya_budget_fallback(tmp_path, monkeypatch):
     config = configuration(tmp_path, "llm")
     path = Path(config.policy_file)
     data = json.loads(path.read_text())
-    data["budget_fallback"] = {"route": "local", "classifier": "laya"}
+    data["budget_fallback"] = {"route": "local"}
     path.write_text(json.dumps(data))
     calls = []
     monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(load=lambda model, device: calls.append(model) or object()))
+    config = replace(config, fallback_classifier="laya")
     policy = Policy(config)
     policy.prepare_models()
     assert calls == [config.laya_model]

@@ -16,7 +16,7 @@ from stopslop.evaluators import assessment
 from stopslop.permissions import AgentGuard
 from stopslop.policy import Policy, PolicyError
 from stopslop.policy_format import policy_toml, read_policy
-from stopslop.proxy import create_app
+from stopslop_proxy import create_app
 from stopslop.repository import SQLiteRepository
 from stopslop.router import PolicyRouter
 from stopslop.runtime import Runtime
@@ -40,7 +40,7 @@ def completion(text="Safe", tokens=10):
 def configuration(tmp_path, **fields):
     path = tmp_path / "policy.toml"
     path.write_text(policy_toml(dict(version=1, default_action="filter", rules=[]) | fields), encoding="utf-8")
-    return Settings(main_key="provider-key", deterministic=True, main_model="chat",
+    return Settings(key="provider-key", deterministic=True, model="chat",
                     state_file=str(tmp_path / "state.sqlite3"), policy_file=str(path))
 
 
@@ -180,7 +180,7 @@ def test_repository_transaction_rollback_and_injection():
             repository.append("audit", 100, "test", {"event": "should_rollback"})
             raise RuntimeError()
     assert repository.count("audit") == 0
-    policy = Policy(Settings(main_key="test", state_file=":memory:"), repository=repository)
+    policy = Policy(Settings(key="test", state_file=":memory:"), repository=repository)
     route = policy.route(payload())
     policy.finish(route, completion())
     policy.runtime.close()
@@ -192,7 +192,7 @@ def test_toml_round_trip_and_live_edit(tmp_path):
     path = tmp_path / "policy.toml"
     path.write_text(policy_toml(data), encoding="utf-8")
     assert read_policy(path) == data
-    policy = Policy(Settings(main_key="test", deterministic=True, policy_file=str(path)))
+    policy = Policy(Settings(key="test", deterministic=True, policy_file=str(path)))
     with pytest.raises(PolicyError, match="policy_blocked"):
         policy.route(payload("Project Żaba"))
     data["rules"][0]["action"] = "allow"
@@ -356,6 +356,6 @@ def test_chat_display_does_not_replay_terminal_escape_sequences():
 @pytest.mark.parametrize("options", [dict(temperature={"hidden": "private"}), dict(top_p="private"),
                                     dict(temperature=float("inf")), dict(top_p=-1)])
 def test_numeric_generation_fields_cannot_carry_uninspected_text(options):
-    policy = Policy(Settings(main_key="test", state_file=":memory:"))
+    policy = Policy(Settings(key="test", state_file=":memory:"))
     with pytest.raises(PolicyError):
         policy.route(payload() | options)

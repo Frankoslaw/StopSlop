@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 from stopslop.config import Settings
-from stopslop.proxy import create_app
+from stopslop_proxy import create_app
 from stopslop.rules import Detector
 from cases import CASES
 
@@ -22,7 +22,7 @@ def test_policy_controls_actual_outbound_request(policy):
     def handler(request):
         calls.append(request)
         return httpx.Response(200, json={"choices": []})
-    settings = Settings(main_key="main-secret", policy=policy,
+    settings = Settings(key="main-secret", policy=policy,
                         fallback_base_url="https://fallback.example/v1", fallback_model="fallback",
                         fallback_key="fallback-secret")
     app = create_app(settings, httpx.MockTransport(handler))
@@ -51,7 +51,7 @@ def test_policy_controls_actual_outbound_request(policy):
         assert payload["model"] == "fallback"
     else:
         assert calls[0].url.host == "integrate.api.nvidia.com"
-        assert payload["model"] == settings.main_model
+        assert payload["model"] == settings.model
         assert calls[0].headers["authorization"] == "Bearer main-secret"
 
 
@@ -65,7 +65,7 @@ def test_policy_controls_actual_outbound_request(policy):
 def test_unsupported_payload_never_forwards(payload):
     def handler(request):
         pytest.fail("unsupported input reached upstream")
-    app = create_app(Settings(main_key="secret"), httpx.MockTransport(handler))
+    app = create_app(Settings(key="secret"), httpx.MockTransport(handler))
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             return await client.post("/v1/chat/completions", json=payload)
@@ -90,7 +90,7 @@ def test_upstream_failure_does_not_leak_or_redirect():
     def handler(request):
         calls.append(request)
         return httpx.Response(401, json={"error": "secret echoed upstream"})
-    app = create_app(Settings(main_key="secret"), httpx.MockTransport(handler))
+    app = create_app(Settings(key="secret"), httpx.MockTransport(handler))
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             return await client.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hello"}]})
@@ -102,11 +102,11 @@ def test_upstream_failure_does_not_leak_or_redirect():
 
 def test_config_precedence(tmp_path, monkeypatch):
     env = tmp_path / ".env"
-    env.write_text("STOPSLOP_MAIN_MODEL=file-model\nSTOPSLOP_POLICY=filter\n")
-    monkeypatch.setenv("STOPSLOP_MAIN_MODEL", "environment-model")
+    env.write_text("STOPSLOP_MODEL=file-model\nSTOPSLOP_POLICY=filter\n")
+    monkeypatch.setenv("STOPSLOP_MODEL", "environment-model")
     monkeypatch.delenv("STOPSLOP_POLICY", raising=False)
-    assert Settings.load(str(env)).main_model == "environment-model"
-    assert Settings.load(str(env), main_model="cli-model").main_model == "cli-model"
+    assert Settings.load(str(env)).model == "environment-model"
+    assert Settings.load(str(env), model="cli-model").model == "cli-model"
     assert Settings.load(str(env)).policy == "filter"
 
 
@@ -115,7 +115,7 @@ def test_redirect_keeps_benign_requests_on_main():
     def handler(request):
         calls.append(request)
         return httpx.Response(200, json={"choices": []})
-    settings = Settings(main_key="main", policy="redirect", fallback_base_url="https://fallback.example/v1",
+    settings = Settings(key="main", policy="redirect", fallback_base_url="https://fallback.example/v1",
                         fallback_model="fallback", fallback_key="fallback")
     app = create_app(settings, httpx.MockTransport(handler))
     async def run():

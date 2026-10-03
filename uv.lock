@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 members = [
     "stopslop",
     "stopslop-demo",
+    "stopslop-proxy",
     "stopslop-top",
     "stopslop-workspace",
 ]
@@ -1038,12 +1039,10 @@ name = "stopslop"
 version = "0.1.0"
 source = { editable = "packages/stopslop" }
 dependencies = [
-    { name = "fastapi" },
     { name = "httpx" },
     { name = "python-dotenv" },
     { name = "regex" },
     { name = "structlog" },
-    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -1053,13 +1052,11 @@ laya = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "laya", marker = "extra == 'laya'", specifier = ">=0.3.20" },
     { name = "python-dotenv", specifier = ">=1" },
     { name = "regex", specifier = ">=2024.11.6" },
     { name = "structlog", specifier = ">=25" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 provides-extras = ["laya"]
 
@@ -1078,6 +1075,23 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "openai", specifier = ">=2" },
     { name = "stopslop", editable = "packages/stopslop" },
+]
+
+[[package]]
+name = "stopslop-proxy"
+version = "0.1.0"
+source = { editable = "packages/stopslop_proxy" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "stopslop" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "stopslop", editable = "packages/stopslop" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]
@@ -1107,6 +1121,7 @@ dev = [
     { name = "httpx" },
     { name = "pytest" },
     { name = "stopslop-demo" },
+    { name = "stopslop-proxy" },
     { name = "stopslop-top" },
 ]
 
@@ -1117,6 +1132,7 @@ dev = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "pytest", specifier = ">=8" },
     { name = "stopslop-demo", editable = "packages/stopslop_demo" },
+    { name = "stopslop-proxy", editable = "packages/stopslop_proxy" },
     { name = "stopslop-top", editable = "packages/stopslop_top" },
 ]
 

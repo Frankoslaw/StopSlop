@@ -3,16 +3,19 @@ uv := env_var_or_default("UV", "uv")
 test:
     {{uv}} run --no-sync pytest -q
 
-# Fast hosted demo: Jev classification and NVIDIA chat.
+# Demo uses the single provider/classifier configuration from .env.
 demo *args:
-    {{uv}} run --no-sync --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.toml --main-provider nvidia --classifier jev --color always --max-tokens 96 --timeout 45 {{args}}
+    {{uv}} run --no-sync --package stopslop-demo stopslop-demo --scenario nda --color always --max-tokens 96 {{args}}
 
 # Local classifier and Ollama chat; override the configured model with --model NAME.
 demo-local *args:
-    {{uv}} run --no-sync --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.toml --main-provider ollama --classifier laya --color always --max-tokens 96 --timeout 120 {{args}}
+    {{uv}} run --no-sync --package stopslop-demo stopslop-demo --scenario nda --provider ollama --base-url http://127.0.0.1:11434/v1 --key ollama --classifier laya --color always --max-tokens 96 {{args}}
+
+proxy *args:
+    {{uv}} run --no-sync --package stopslop-proxy stopslop-proxy {{args}}
 
 top:
-    {{uv}} run --no-sync --package stopslop_top stopslop-top
+    {{uv}} run --no-sync --package stopslop-top stopslop-top
 
 # Stop running processes before resetting local runtime state.
 clean:

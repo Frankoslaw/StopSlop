@@ -72,7 +72,7 @@ def test_proxy_budget_metrics_and_model_forwarding(tmp_path):
     import asyncio
     import httpx
     from stopslop.config import Settings
-    from stopslop.proxy import create_app
+    from stopslop_proxy import create_app
     policy = tmp_path / "policy.json"
     policy.write_text(json.dumps({"version": 1, "rules": [], "allowed_models": ["client-model"], "budgets": [
         dict(id="output", type="fixed_quota", tokens="output", limit=10,
@@ -81,7 +81,7 @@ def test_proxy_budget_metrics_and_model_forwarding(tmp_path):
     def backend(request):
         calls.append(json.loads(request.content))
         return httpx.Response(200, json={"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 6}})
-    app = create_app(Settings(main_key="test", deterministic=True, preserve_model=True,
+    app = create_app(Settings(key="test", deterministic=True, preserve_model=True,
                              policy_file=str(policy)), httpx.MockTransport(backend))
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as c:

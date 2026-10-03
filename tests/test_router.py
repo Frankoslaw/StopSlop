@@ -9,7 +9,7 @@ from cases import CASES
 
 
 def settings(policy):
-    return Settings(classifier="jev", main_key="main-secret", policy=policy,
+    return Settings(classifier="jev", key="main-secret", policy=policy,
                     fallback_base_url="https://fallback.example/v1", fallback_model="fallback",
                     fallback_key="fallback-secret")
 
@@ -29,7 +29,7 @@ def test_sdk_policy_outcomes(policy, case):
         return httpx.Response(200, json=completion_response())
     configuration = settings(policy)
     router = PolicyRouter(configuration, httpx.MockTransport(upstream))
-    with OpenAI(base_url=configuration.main_base_url, api_key=configuration.main_key,
+    with OpenAI(base_url=configuration.base_url, api_key=configuration.key,
                 max_retries=0, http_client=httpx.Client(transport=router)) as client:
         payload = {"model": "untrusted-model", "messages": [{"role": "user", "content": case.prompt}]}
         if policy == "block" and case.expected_rules:
@@ -45,7 +45,7 @@ def test_sdk_policy_outcomes(policy, case):
     redirected = policy == "redirect" and sensitive
     assert calls[0].url.host == ("fallback.example" if redirected else "integrate.api.nvidia.com")
     assert calls[0].headers["authorization"] == ("Bearer fallback-secret" if redirected else "Bearer main-secret")
-    assert forwarded["model"] == ("fallback" if redirected else configuration.main_model)
+    assert forwarded["model"] == ("fallback" if redirected else configuration.model)
     if policy == "filter" and sensitive:
         assert forwarded["messages"][0]["content"] != case.prompt
         assert not router.policy.detector.scan(forwarded["messages"][0]["content"])
@@ -59,9 +59,9 @@ def test_demo_uses_standard_sdk_and_request_timeout(capsys):
         calls.append(request)
         return httpx.Response(200, json=completion_response())
     configuration = settings("block")
-    with OpenAI(base_url=configuration.main_base_url, api_key=configuration.main_key, timeout=12,
+    with OpenAI(base_url=configuration.base_url, api_key=configuration.key, timeout=12,
                 max_retries=0, http_client=httpx.Client(transport=PolicyRouter(configuration, httpx.MockTransport(upstream)))) as client:
-        assert chat(client, configuration.main_model, [{"role": "user", "content": "Capital of Poland?"}]) == "Warsaw"
+        assert chat(client, configuration.model, [{"role": "user", "content": "Capital of Poland?"}]) == "Warsaw"
     assert "Warsaw" in capsys.readouterr().out
     assert calls[0].extensions["timeout"]["read"] == 12
     payload = json.loads(calls[0].content)
@@ -77,10 +77,10 @@ def test_rate_limit_is_not_retried():
         calls.append(request)
         return httpx.Response(429, json={"error": {"message": "rate limit", "code": "rate_limit"}})
     configuration = settings("block")
-    with OpenAI(base_url=configuration.main_base_url, api_key=configuration.main_key,
+    with OpenAI(base_url=configuration.base_url, api_key=configuration.key,
                 max_retries=0, http_client=httpx.Client(transport=PolicyRouter(configuration, httpx.MockTransport(upstream)))) as client:
         with pytest.raises(RateLimitError):
-            chat(client, configuration.main_model, [{"role": "user", "content": "Hello"}])
+            chat(client, configuration.model, [{"role": "user", "content": "Hello"}])
     assert len(calls) == 1
 
 
@@ -97,7 +97,7 @@ def test_semantic_cases_use_jev_probabilities_and_enforce_actions(case):
         return httpx.Response(200, json={"answers": {
             name: {"type": "noul", "noul": .95 if name.endswith(case.semantic_rule) else .01}
             for name in body["questions"]}})
-    configuration = Settings(classifier="jev", main_key="cloud", jev_key="test", policy_file=str(
+    configuration = Settings(classifier="jev", key="cloud", jev_key="test", policy_file=str(
         Path(__file__).resolve().parents[1] / "policy.toml"))
     from stopslop.jev import JevEvaluator
     policy = Policy(configuration, evaluator=JevEvaluator(configuration, httpx.MockTransport(jev)))

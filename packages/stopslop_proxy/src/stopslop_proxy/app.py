@@ -6,9 +6,9 @@ import httpx
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from .config import Settings
-from .policy import Policy, PolicyError
-from .http_limits import request_payload
+from stopslop.config import Settings
+from stopslop.policy import Policy, PolicyError
+from stopslop.http_limits import request_payload
 
 def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = None, jev_transport=None, evaluator=None, repository=None) -> FastAPI:
     policy = Policy(settings, jev_transport, evaluator, repository)

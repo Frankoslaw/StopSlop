@@ -7,7 +7,7 @@ import pytest
 
 from stopslop.config import Settings
 from stopslop.policy import Policy, PolicyError
-from stopslop.proxy import create_app
+from stopslop_proxy import create_app
 from stopslop.router import PolicyRouter
 from stopslop.rules import Detector
 
@@ -40,7 +40,7 @@ def test_invalid_checksums_and_word_boundaries():
 def configuration(tmp_path, rules, **kwargs):
     path = tmp_path / "policy.json"
     path.write_text(json.dumps({"version": 1, "default_action": "filter", "rules": rules}))
-    return Settings(main_key="cloud", policy_file=str(path), **kwargs)
+    return Settings(key="cloud", policy_file=str(path), **kwargs)
 
 
 def payload(text):
@@ -126,7 +126,7 @@ def test_invalid_policy_rejected_at_startup(tmp_path, rules):
 
 
 def test_shipped_policy():
-    policy = Policy(Settings(main_key="cloud", local_model="small-local",
+    policy = Policy(Settings(key="cloud", local_model="small-local",
                              policy_file=str(Path(__file__).resolve().parents[1] / "policy.toml"), deterministic=True))
     assert policy.route(payload("Hello")).action == "allow"
     assert policy.route(payload("jane@example.org")).action == "filter"

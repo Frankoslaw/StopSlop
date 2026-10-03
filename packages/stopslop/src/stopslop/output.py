@@ -62,9 +62,9 @@ def inspect_output(policy, route, body):
                 matches, all_risks = policy.assess(route.evaluator, context + generated, list(semantic.values()), len(context),
                                                  budgets=route.budgets, client_id=route.client_id)
             except PolicyError as error:
-                if not policy.can_budget_fallback(error, definition) or not definition.budget_fallback.get("classifier"):
+                if not policy.can_budget_fallback(error, definition) or not policy.settings.fallback_classifier:
                     raise
-                evaluator = policy.evaluator_for(definition.budget_fallback["classifier"])
+                evaluator = policy.evaluator_for(policy.settings.fallback_classifier)
                 if evaluator is route.evaluator:
                     raise
                 active_evaluator = evaluator

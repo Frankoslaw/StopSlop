@@ -6,7 +6,7 @@ import pytest
 
 from stopslop.config import Settings
 from stopslop.policy import Policy
-from stopslop.proxy import create_app
+from stopslop_proxy import create_app
 from stopslop.router import PolicyRouter
 
 
@@ -15,7 +15,7 @@ def payload(text):
 
 
 def test_mapping_repeats_collisions_overlaps_and_isolation():
-    policy = Policy(Settings(main_key="secret", policy="filter"))
+    policy = Policy(Settings(key="secret", policy="filter"))
     phone = "+48 555 555 555"
     bank = "PL61 1090 1014 0000 0712 1981 2874"
     text = f"[ANON:phone:1] Jan Kowalski {phone} {phone} {bank}"
@@ -37,7 +37,7 @@ def test_mapping_repeats_collisions_overlaps_and_isolation():
 
 @pytest.mark.parametrize("transport_kind", ["router", "proxy"])
 def test_filter_round_trip_all_choices_and_followup(transport_kind):
-    configuration = Settings(main_key="secret", policy="filter")
+    configuration = Settings(key="secret", policy="filter")
     originals = ["+48 555 555 555", "+48 512 345 678", "Jan Kowalski", "02070803628"]
     text = " / ".join(originals)
     calls = []
@@ -84,7 +84,7 @@ def test_restoration_does_not_cascade():
 
 
 def test_invalid_filter_response_fails_locally():
-    router = PolicyRouter(Settings(main_key="secret", policy="filter"),
+    router = PolicyRouter(Settings(key="secret", policy="filter"),
                           httpx.MockTransport(lambda request: httpx.Response(200, text="invalid")))
     with httpx.Client(transport=router) as client:
         response = client.post("https://local/v1/chat/completions", json=payload("Jan Kowalski"))

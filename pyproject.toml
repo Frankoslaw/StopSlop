@@ -8,8 +8,9 @@ dependencies = []
 members = ["packages/*"]
 
 [dependency-groups]
-dev = ["pytest>=8", "httpx>=0.28", "stopslop-demo", "stopslop-top"]
+dev = ["pytest>=8", "httpx>=0.28", "stopslop-demo", "stopslop-top", "stopslop-proxy"]
 
 [tool.uv.sources]
+stopslop-proxy = { workspace = true }
 stopslop-demo = { workspace = true }
 stopslop-top = { workspace = true }

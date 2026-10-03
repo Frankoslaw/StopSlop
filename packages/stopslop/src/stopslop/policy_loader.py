@@ -37,7 +37,6 @@ def merge_policy(base, dynamic):
 class PolicyLoader:
     def __init__(self, settings, repository=None):
         self.repository = repository
-        self.classifier_override = settings.classifier_override
         if settings.dynamic_policy_file and not settings.policy_file:
             raise ValueError("dynamic_policy_file requires policy_file")
         self.paths = [Path(settings.policy_file)] if settings.policy_file else []
@@ -60,10 +59,6 @@ class PolicyLoader:
                 data = merge_policy(data, overlay)
             if len(self.paths) > 1 and self.paths[1].exists():
                 data = merge_policy(data, read_policy(self.paths[1]))
-            if self.classifier_override:
-                data = {**data, "classifier": self.classifier_override}
-                if data.get("budget_fallback", {}).get("classifier"):
-                    data["budget_fallback"] = {**data["budget_fallback"], "classifier": self.classifier_override}
             definition = PolicyFile(data=data)
             self.definition, self.signature = definition, signature
             return definition

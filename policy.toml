@@ -2,7 +2,6 @@
 # Actions: allow, filter, local, block. Thresholds are percentages.
 
 version = 1
-classifier = "laya"
 default_action = "filter"
 # Add exact approved cloud and installed local model names here.
 allowed_models = ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "small-local"]
@@ -189,7 +188,5 @@ type = "memory"
 
 # Free local fallback: configure STOPSLOP_LOCAL_MODEL and approve it in allowed_models.
 # For a cheaper provider use route = "fallback" and STOPSLOP_FALLBACK_* settings.
-# Classifier keeps semantic checks working when a paid evaluator exhausts its budget.
 [budget_fallback]
 route = "local"
-classifier = "laya"

@@ -7,7 +7,7 @@ flowchart LR
     Client --> Proxy[StopSlop: validate and scan]
     Proxy --> Policy{Policy}
     Policy --> Block[403]
-    Policy --> Main[NVIDIA main model]
+    Policy --> Main[Configured OpenAI / NVIDIA / Ollama model]
     Policy --> Fallback[Trusted fallback]
     Tests[pytest and interactive demo] --> Proxy
 ```
@@ -16,7 +16,7 @@ Implemented: deterministic and semantic input/output checks, centralized policy 
 block/filter/local/warning actions, approved model lists, optional authenticated-client
 suspension, persistent shared token quotas, historical attack signatures, optional
 incident-to-policy generation, live policy reload, a terminal dashboard, exportable
-audit metadata, automated positive/negative tests, and an interactive NVIDIA demo.
+audit metadata, automated positive/negative tests, and an interactive provider-independent demo.
 See [governance](governance.md) for configuration and operating limits.
 
 AgentGuard and an authenticated authorization endpoint now provide explicit tool/MCP
@@ -37,3 +37,8 @@ Review checkpoints: (1) workspace/config and policy semantics, (2) input/output 
 offline forwarding checks, (3) shared quota and client-suspension regressions, (4)
 adaptive-feed validation, positive/negative exploit cases, and documented gaps.
 Do not commit `.env`, credentials, incident feeds, or runtime control state.
+
+Architecture now separates the provider gateway (`stopslop-proxy`) from the shared policy
+engine (`stopslop`), demo and dashboard. One runtime setting vocabulary covers environment,
+flags and Python; policies contain enforcement decisions only. See [demo checklist](demo.md)
+for evidence to collect against each criterion before submission.
