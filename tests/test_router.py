@@ -65,8 +65,10 @@ def test_demo_uses_standard_sdk_and_request_timeout(capsys):
     assert "Warsaw" in capsys.readouterr().out
     assert calls[0].extensions["timeout"]["read"] == 12
     payload = json.loads(calls[0].content)
-    assert payload["max_tokens"] == 1024
+    assert payload["max_tokens"] == 256
     assert payload["stream"] is False
+    assert payload["reasoning_budget"] == 0
+    assert payload["temperature"] == 0.2
 
 
 def test_rate_limit_is_not_retried():
@@ -110,3 +112,37 @@ def test_demo_cli_single_and_interactive(monkeypatch, capsys, single_prompt):
     assert "Warsaw" in output.out
     if not single_prompt:
         assert "policy_blocked" in output.err
+
+
+@pytest.mark.parametrize("options", [
+    {"reasoning_budget": "Jan Kowalski"},
+    {"reasoning_budget": True},
+    {"reasoning_budget": 32769},
+    {"chat_template_kwargs": {"hidden": "Jan Kowalski"}},
+    {"chat_template_kwargs": {"enable_thinking": "false"}},
+])
+def test_reasoning_options_cannot_carry_unscanned_text(options):
+    from stopslop.policy import Policy, PolicyError
+    with pytest.raises(PolicyError):
+        Policy(settings("block")).route({"messages": [{"role": "user", "content": "Hello"}], **options})
+
+
+def test_other_models_do_not_receive_nvidia_thinking_options():
+    from types import SimpleNamespace
+    captured = {}
+    def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Hello"))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    chat(client, "other-model", [{"role": "user", "content": "Hello"}])
+    assert captured["extra_body"] == {}
+
+
+
+def test_demo_shows_final_answer_after_hosted_thinking_delimiter(capsys):
+    from types import SimpleNamespace
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **kwargs: SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="reasoning text</think>Final answer"))]))))
+    assert chat(client, "other-model", [{"role": "user", "content": "Hello"}]) == "Final answer"
+    assert capsys.readouterr().out == "Final answer\n"

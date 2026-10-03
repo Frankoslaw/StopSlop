@@ -8,7 +8,7 @@ POLICIES = ("block", "redirect", "filter", "passthrough")
 @dataclass(frozen=True)
 class Settings:
     main_base_url: str = "https://integrate.api.nvidia.com/v1"
-    main_model: str = "z-ai/glm-5.3-flash"
+    main_model: str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
     main_key: str = ""
     policy: str = "block"
     fallback_base_url: str = ""

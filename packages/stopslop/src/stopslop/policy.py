@@ -25,9 +25,11 @@ class Policy:
         self.detector = Detector(settings.rules_file)
 
     def route(self, payload) -> Route:
-        allowed = {"model", "messages", "temperature", "top_p", "max_tokens", "stream"}
+        allowed = {"model", "messages", "temperature", "top_p", "max_tokens", "stream", "reasoning_budget"}
         if not isinstance(payload, dict) or set(payload) - allowed or payload.get("stream", False) is not False:
             raise PolicyError("unsupported_payload", 400)
+        if "reasoning_budget" in payload and (type(payload["reasoning_budget"]) is not int or not -1 <= payload["reasoning_budget"] <= 32768):
+            raise PolicyError("invalid_reasoning_budget", 400)
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages or any(
             not isinstance(m, dict) or set(m) != {"role", "content"}

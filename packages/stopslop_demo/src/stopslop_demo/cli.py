@@ -8,17 +8,21 @@ from stopslop.router import PolicyRouter
 
 def chat(client, model, messages):
     # Normal NVIDIA/OpenAI example; enforcement is injected at construction.
+    options = {"reasoning_budget": 0} if model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning" else {}
     completion = client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=0.5,
+        temperature=0.2,
         top_p=1,
-        max_tokens=1024,
+        max_tokens=256,
         stream=False,
+        extra_body=options,
     )
     message = completion.choices[0].message
-    print(message.content or "[Model returned no text]", flush=True)
-    return message.content
+    # Some hosted responses put a thinking delimiter inside content. Show the final answer.
+    answer = (message.content or "").rsplit("</think>", 1)[-1].strip()
+    print(answer or "[Model returned no text]", flush=True)
+    return answer
 
 
 def main():

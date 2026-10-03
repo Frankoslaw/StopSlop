@@ -15,6 +15,9 @@ The demo uses `from openai import OpenAI` with a normal chat-completion call.
 One injected `httpx` transport applies policy locally before forwarding to NVIDIA;
 no server, local port, or elevated privileges are needed. Every accepted turn makes
 one request; automatic retries are disabled. HTTP 429 stops the demo. `/quit` exits.
+The default model is `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, with
+256 output tokens and `reasoning_budget=0` for quick text demos. Other models
+selected with `--model` do not receive this NVIDIA-specific reasoning option.
 The default timeout is 120 seconds; override it with `--timeout`. Rejected turns are not added to chat history.
 
 ```python
