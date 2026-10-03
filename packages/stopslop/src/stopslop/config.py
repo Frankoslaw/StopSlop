@@ -25,6 +25,9 @@ class Settings:
     jev_key: str = ""
     jev_base_url: str = "https://api.typesafe.ai/v1"
     jev_model: str = "jev-latest"
+    log_file: str = "stopslop.log"
+    metrics_file: str = "metrics.json"
+    preserve_model: bool = False
     timeout: float = 120.0
 
     def __post_init__(self):
@@ -49,7 +52,7 @@ class Settings:
         for name in cls.__dataclass_fields__:
             value = os.getenv("STOPSLOP_" + name.upper())
             if value is not None:
-                if name == "deterministic":
+                if name in ("deterministic", "preserve_model"):
                     if value.lower() not in ("true", "false", "1", "0"):
                         raise ValueError("STOPSLOP_DETERMINISTIC must be true or false")
                     values[name] = value.lower() in ("true", "1")

@@ -192,3 +192,6 @@ pip-selfcheck.json
 .uv-cache/
 report.json
 filter-report.json
+
+metrics.json
+stopslop.log

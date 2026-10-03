@@ -5,6 +5,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from .rules import Detector
+from .runtime import validate_budgets
 
 ACTIONS = {"allow", "filter", "local", "block"}
 
@@ -12,10 +13,11 @@ ACTIONS = {"allow", "filter", "local", "block"}
 class PolicyFile:
     def __init__(self, path: str):
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or set(data) - {"version", "default_action", "rules"}:
+        if not isinstance(data, dict) or set(data) - {"version", "default_action", "rules", "budgets"}:
             raise ValueError("Invalid policy file fields")
         if type(data.get("version")) is not int or data["version"] != 1 or not isinstance(data.get("default_action", "block"), str) or data.get("default_action", "block") not in ACTIONS:
             raise ValueError("Policy requires version 1 and a valid default_action")
+        self.budgets = validate_budgets(data.get("budgets", []))
         entries = data.get("rules", [])
         if not isinstance(entries, list):
             raise ValueError("Policy rules must be an array")

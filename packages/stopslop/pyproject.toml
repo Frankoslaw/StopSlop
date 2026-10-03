@@ -3,7 +3,7 @@ name = "stopslop"
 version = "0.1.0"
 description = "Deterministic OpenAI-compatible privacy proxy"
 requires-python = ">=3.14"
-dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.28", "python-dotenv>=1"]
+dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.28", "python-dotenv>=1", "structlog>=25"]
 [project.scripts]
 stopslop = "stopslop.cli:main"
 [build-system]

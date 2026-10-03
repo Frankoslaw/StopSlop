@@ -38,7 +38,17 @@ class PolicyRouter(httpx.BaseTransport):
         headers["authorization"] = f"Bearer {route.key}"
         outbound = httpx.Request("POST", route.base_url.rstrip("/") + "/chat/completions",
                                  headers=headers, json=route.payload, extensions=request.extensions)
-        response = self.upstream.handle_request(outbound)
+        try:
+            response = self.upstream.handle_request(outbound)
+            response.read()
+            try:
+                usage_body = response.json()
+            except ValueError:
+                usage_body = None
+            self.policy.runtime.finish(route.ticket, usage_body, route.action, response.is_error)
+        except Exception:
+            self.policy.runtime.finish(route.ticket, failed=True)
+            raise
         if response.status_code >= 500:
             status = response.status_code
             response.close()

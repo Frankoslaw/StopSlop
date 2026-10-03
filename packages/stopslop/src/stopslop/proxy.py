@@ -1,4 +1,5 @@
 """Optional HTTP server sharing policy with the in-process router."""
+import asyncio
 import json
 import httpx
 from starlette.concurrency import run_in_threadpool
@@ -11,6 +12,8 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
     app = FastAPI(title="StopSlop")
     policy = Policy(settings, jev_transport, evaluator)
 
+    app.state.policy = policy
+
     @app.get("/health")
     async def health():
         return {"status": "ok", "policy": settings.policy}
@@ -20,6 +23,7 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         try:
             payload = await request.json()
         except ValueError:
+            policy.runtime.violation("invalid_json", [])
             return JSONResponse({"error": {"code": "invalid_json"}}, status_code=400)
         try:
             route = await run_in_threadpool(policy.route, payload)
@@ -30,8 +34,13 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
                 response = await client.post(route.base_url.rstrip("/") + "/chat/completions",
                                              json=route.payload, headers={"Authorization": f"Bearer {route.key}"})
             body = response.json()
+        except asyncio.CancelledError:
+            policy.runtime.finish(route.ticket, failed=True)
+            raise
         except (httpx.HTTPError, ValueError):
+            policy.runtime.finish(route.ticket, failed=True)
             return JSONResponse({"error": {"code": "upstream_unavailable"}}, status_code=502)
+        policy.runtime.finish(route.ticket, body, route.action, response.is_error)
         if response.is_error:
             body = {"error": {"code": "upstream_error", "status": response.status_code}}
         else:

@@ -1,8 +1,9 @@
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import logging
 import re
 from .config import Settings
+from .runtime import Runtime
 from .rules import Detector
 from .jev import JevEvaluator
 from .evaluators import EvaluationError, SemanticEvaluator
@@ -26,6 +27,7 @@ class Route:
     replacements: dict[str, str] = field(default_factory=dict, repr=False)
 
     risks: dict[str, float] = field(default_factory=dict)
+    ticket: str = ""
 
     def restore(self, body):
         """Restore exact tokens locally, in one pass (never cascade replacements)."""
@@ -53,17 +55,31 @@ class Policy:
             if settings.rules_file:
                 raise ValueError("Use policy_file or rules_file, not both")
             self.detector = self.definition.detector
+        self.runtime = Runtime(settings.metrics_file, self.definition.budgets if self.definition else [], log_file=settings.log_file)
         self.evaluator = None if settings.deterministic else (evaluator if evaluator is not None else JevEvaluator(settings, jev_transport))
         if (not settings.deterministic and evaluator is None and self.definition
                 and self.definition.semantic_rules and not settings.jev_key):
             raise ValueError("Semantic policies require STOPSLOP_JEV_KEY")
 
     def route(self, payload) -> Route:
+        try:
+            route = self._route(payload)
+            ticket = self.runtime.reserve(route.payload)
+            if self.runtime.budgets:
+                route.payload.setdefault("max_tokens", 1024)
+            return replace(route, ticket=ticket)
+        except PolicyError as error:
+            self.runtime.violation(error.code, error.rules)
+            raise
+
+    def _route(self, payload) -> Route:
         allowed = {"model", "messages", "temperature", "top_p", "max_tokens", "stream", "reasoning_budget"}
         if not isinstance(payload, dict) or set(payload) - allowed or payload.get("stream", False) is not False:
             raise PolicyError("unsupported_payload", 400)
         if "reasoning_budget" in payload and (type(payload["reasoning_budget"]) is not int or not -1 <= payload["reasoning_budget"] <= 32768):
             raise PolicyError("invalid_reasoning_budget", 400)
+        if "model" in payload and (not isinstance(payload["model"], str) or not payload["model"]):
+            raise PolicyError("invalid_model", 400)
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages or any(
             not isinstance(m, dict) or set(m) != {"role", "content"}
@@ -125,6 +141,8 @@ class Policy:
         summary = f"action={action} rules={','.join(rules) or 'none'}"
         if threshold_details:
             summary += " | " + "; ".join(threshold_details)
+        if rules and action != "block":
+            self.runtime.violation("policy_triggered", rules)
         if action == "block":
             logger.error("%s | chat backend=none", summary)
             raise PolicyError("policy_blocked", 403, rules, risks)
@@ -152,7 +170,7 @@ class Policy:
         settings = self.settings
         base = settings.fallback_base_url if fallback else settings.main_base_url
         key = settings.fallback_key if fallback else settings.main_key
-        outbound["model"] = settings.fallback_model if fallback else settings.main_model
+        outbound["model"] = settings.fallback_model if fallback else (payload.get("model", settings.main_model) if settings.preserve_model else settings.main_model)
         if action == "local":
             if not settings.local_model:
                 raise PolicyError("missing_local_model", 503, rules)
@@ -165,4 +183,4 @@ class Policy:
         logger.log(logging.WARNING if action in ("filter", "local", "redirect") else logging.INFO,
                    "%s | chat backend=%s model=%s", summary, backend, outbound["model"])
         logger.info("Generating response", extra={"progress": f"Generating response [{backend}: {outbound['model']}]"})
-        return Route(outbound, base, key, action, rules, replacements, risks)
+        return Route(outbound, base, key, action, rules, replacements, risks=risks)

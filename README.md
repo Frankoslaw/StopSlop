@@ -245,3 +245,51 @@ uv run pytest -q
 uv run --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.json --color always --max-tokens 96 --timeout 45
 uv run python tools/demo_tasks.py clean
 ```
+
+
+### Usage budgets and standalone gateway
+
+Run `stopslop --host 127.0.0.1 --port 8000 --preserve-model --policy-file policy.json`.
+Set `STOPSLOP_MAIN_BASE_URL` and `STOPSLOP_MAIN_KEY` for your upstream provider,
+and point every client's OpenAI-compatible base URL at `http://127.0.0.1:8000/v1`.
+`--preserve-model` forwards the requested model on the main route; policy-selected
+local and fallback routes still use their configured models. This gateway handles
+non-streaming text chat completions. Enforcement covers clients using this endpoint;
+network/firewall controls are needed to prevent clients connecting directly to providers.
+
+Add an optional `budgets` array to a version 1 policy file:
+
+```json
+"budgets": [
+  {"id": "rolling_input", "type": "rolling_average", "tokens": "input",
+   "limit": 100, "window_seconds": 60},
+  {"id": "daily_output", "type": "fixed_quota", "tokens": "output",
+   "limit": 50000, "window_seconds": 86400,
+   "reset_at": "2026-01-01T00:00:00+00:00"}
+]
+```
+
+`tokens` selects `input`, `output`, or `total` (default). Optional `models` restricts
+accounting to an array of routed model names. Rolling limits are tokens per second,
+averaged over the full trailing window, including idle time. Fixed limits are tokens
+per interval, aligned to the timezone-aware `reset_at` anchor, repeating every
+`window_seconds` (fixed elapsed intervals, without daylight-saving adjustments).
+A request that would exceed any budget returns HTTP 429 with `budget_exceeded`
+and the budget ID before calling the chat backend.
+
+Admission reserves UTF-8 input bytes plus 16 per message and `max_tokens` for output.
+Budgeted requests without `max_tokens` get a 1024-token output cap. These are
+conservative estimates, not model-specific tokenizer counts. Successful responses
+replace reservations with provider `usage` counts; missing usage keeps the estimates.
+Failed calls release reservations. Concurrent calls share reservations within one
+process. Semantic evaluation calls are outside these chat budgets. Use one server
+worker: budgets are in-memory and reset when the process restarts.
+
+`metrics.json` is atomically rewritten with cumulative input/output tokens, completed
+requests, failures, pending calls, actions, and timestamped violations. It contains no
+prompts, responses, or credentials. `stopslop.log` stores structured JSON violation
+records, including filter/local/redirect policy triggers. Override locations with
+`--metrics-file` and `--log-file` or their `STOPSLOP_...` environment variables.
+Console violation logs use structlog's pretty renderer; `--json-logs` selects JSON.
+Metrics and logs start a new runtime on startup (logs append); snapshots are telemetry,
+not persisted budget state. Violation history grows for the lifetime of the process.
