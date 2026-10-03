@@ -46,7 +46,7 @@ class PolicyRouter(httpx.BaseTransport):
             except ValueError:
                 usage_body = None
             self.policy.runtime.finish(route.ticket, usage_body, route.action, response.is_error)
-        except Exception:
+        except BaseException:
             self.policy.runtime.finish(route.ticket, failed=True)
             raise
         if response.status_code >= 500:
@@ -71,4 +71,7 @@ class PolicyRouter(httpx.BaseTransport):
         return response
 
     def close(self):
-        self.upstream.close()
+        try:
+            self.upstream.close()
+        finally:
+            self.policy.runtime.close()

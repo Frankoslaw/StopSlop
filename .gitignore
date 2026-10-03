@@ -194,4 +194,6 @@ report.json
 filter-report.json
 
 metrics.json
+*.json.sessions/
+docs/*.pdf
 stopslop.log

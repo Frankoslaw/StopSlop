@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: test demo clean
+.PHONY: test demo top
 
 test:
 	$(UV) run pytest -q
@@ -8,5 +8,5 @@ test:
 demo:
 	$(UV) run --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.json --color always --max-tokens 96 --timeout 45
 
-clean:
-	$(UV) run python tools/demo_tasks.py clean
+top:
+	$(UV) run --package stopslop slopstop-top

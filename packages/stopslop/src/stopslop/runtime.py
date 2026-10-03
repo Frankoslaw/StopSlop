@@ -56,19 +56,36 @@ class Runtime:
             handler.setFormatter(logging.Formatter("%(message)s"))
             audit.addHandler(handler)
         self.audit = structlog.wrap_logger(audit, processors=[structlog.processors.TimeStamper(fmt="iso"), structlog.processors.JSONRenderer()])
+        self.audit_logger = audit
         self.lock = RLock()
         self.events = []
         self.pending = {}
+        self.session_id = uuid.uuid4().hex
+        self.closed = False
         self.stats = dict(started_at=clock(), requests=0, completed=0, failures=0,
                           input_tokens=0, output_tokens=0, violation_count=0, violations=[], actions={}, total_latency_seconds=0)
         self.write()
 
     def write(self):
         if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_name(self.path.name + "." + uuid.uuid4().hex + ".tmp")
-            temporary.write_text(json.dumps({**self.stats, "updated_at": self.clock(), "in_flight": len(self.pending)}, indent=2), encoding="utf-8")
-            os.replace(temporary, self.path)
+            snapshot = {**self.stats, "updated_at": self.clock(), "in_flight": len(self.pending),
+                        "session_id": self.session_id, "pid": os.getpid(), "closed": self.closed,
+                        "budgets": list(self.budgets), "usage_events": self.events,
+                        "reservations": list(self.pending.values())}
+            directory = self.path.with_name(self.path.name + ".sessions")
+            directory.mkdir(parents=True, exist_ok=True)
+            for target in (self.path, directory / (self.session_id + ".json")):
+                temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+                temporary.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+                os.replace(temporary, target)
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            self.write()
+            for handler in list(self.audit_logger.handlers):
+                handler.close()
+                self.audit_logger.removeHandler(handler)
 
     def violation(self, code, rules):
         with self.lock:

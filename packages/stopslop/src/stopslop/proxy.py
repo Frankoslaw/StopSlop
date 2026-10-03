@@ -1,6 +1,7 @@
 """Optional HTTP server sharing policy with the in-process router."""
 import asyncio
 import json
+from contextlib import asynccontextmanager
 import httpx
 from starlette.concurrency import run_in_threadpool
 from fastapi import FastAPI, Request
@@ -9,8 +10,16 @@ from .config import Settings
 from .policy import Policy, PolicyError
 
 def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = None, jev_transport=None, evaluator=None) -> FastAPI:
-    app = FastAPI(title="StopSlop")
     policy = Policy(settings, jev_transport, evaluator)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            policy.runtime.close()
+
+    app = FastAPI(title="StopSlop", lifespan=lifespan)
 
     app.state.policy = policy
 

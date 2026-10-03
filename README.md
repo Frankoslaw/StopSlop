@@ -159,7 +159,7 @@ skip Jev. Semantic rules cannot override built-in IDs or use regex exceptions.
 The demo displays `Running rule (x/z): description` on one updating line,
 then switches that line to response generation with elapsed time. Progress fits
 the terminal width and is omitted when output is redirected. Per-rule details
-do not create persistent log lines, including on cached replays. A compact
+do not create persistent log lines, on every run. A compact
 colored outcome shows the action, triggered rules, threshold/risk when relevant,
 and chat backend. INFO is cyan, WARN is yellow for filtering/local routing,
 and ERROR is red for blocks/failures.
@@ -205,8 +205,7 @@ Run the scripted conversation with all demo diagnostics:
 ```powershell
 make test
 make demo
-make clean
-make demo
+make top
 ```
 
 `make demo` runs `--scenario nda` (bare `--scenario` selects the same scenario),
@@ -225,25 +224,15 @@ The scenario requires Jev and the main model credentials; it needs no local mode
 `--deterministic` deliberately disables the semantic NDA guard, so this scenario's
 expected final block will fail in that mode.
 
-Scenario mode caches policy results, audit logs, and final replies in the ignored
-`.cache/stopslop-demo` directory. A replay shows `[cached]` logs and makes no Jev
-or chat-model calls. Cached replies can include locally restored names. Prompts
-are represented by hash keys; credentials are not stored. Policy/code changes,
-model/provider configuration changes, credential changes, and deterministic mode
-produce a different cache namespace. Transient errors are never cached. Normal
-interactive and single-prompt chats are not persisted.
-
-`make clean` removes only the default demo cache, so the next scenario reruns
-policies and generates new replies. Use `--no-cache` for a fresh run without
-reading or writing cache, or `--cache-dir PATH` for a custom location (custom
-locations are not removed by `make clean`).
+Every scenario run rechecks policies and generates fresh replies. The demo does
+not cache prompts, assessments, logs, or replies. There is no `make clean` target.
 
 If Make is unavailable, use the equivalent commands directly:
 
 ```powershell
 uv run pytest -q
 uv run --package stopslop_demo stopslop-demo --scenario nda --policy-file policy.json --color always --max-tokens 96 --timeout 45
-uv run python tools/demo_tasks.py clean
+uv run --package stopslop slopstop-top
 ```
 
 
@@ -293,3 +282,23 @@ records, including filter/local/redirect policy triggers. Override locations wit
 Console violation logs use structlog's pretty renderer; `--json-logs` selects JSON.
 Metrics and logs start a new runtime on startup (logs append); snapshots are telemetry,
 not persisted budget state. Violation history grows for the lifetime of the process.
+
+
+### Live terminal monitor
+
+Run `make top` or `uv run --package stopslop slopstop-top` in a second terminal,
+then run `make demo` or start the gateway. `stopslop-top` is also an alias.
+The display refreshes every half second: running sessions, pending chat calls,
+completed requests, failures, tokens, actions, mean latency, quota usage and
+reservations, recent violations, and warnings at 80% usage. Sessions are policy
+runtimes, not user conversations. Quotas remain independent per runtime.
+Rolling usage and fixed reset countdowns update even while requests are idle.
+
+Use `--metrics-file PATH` or `STOPSLOP_METRICS_FILE` to match a custom producer
+path, `--interval 1` to change refresh frequency, or `--once` to print a snapshot.
+Redirected output prints once. Ctrl+C exits. `<metrics-file>.sessions/` holds
+separate snapshots for concurrent processes. Closed or exited sessions remain as
+history; totals include all saved sessions. Remove that directory manually to
+clear history. Snapshots contain counts, model names, budget configuration and
+rule IDs, never conversation text or credentials. No configured budgets displays
+“No active quota limits.” PDFs under `docs/` are ignored by Git.

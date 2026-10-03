@@ -1,5 +1,4 @@
 from dataclasses import replace
-import importlib.util
 import json
 from pathlib import Path
 
@@ -8,7 +7,6 @@ import pytest
 
 from stopslop.config import Settings
 from stopslop.router import PolicyRouter
-from stopslop_demo.cache import DemoCache, fingerprint
 from stopslop_demo.scenarios import SCENARIOS
 from stopslop_demo.spinner import Spinner
 
@@ -24,7 +22,7 @@ def completion():
                          "message": {"role": "assistant", "content": "Agenda updated."}}]}
 
 
-def test_scenario_runs_sequentially_filters_then_blocks_and_replays_cache(tmp_path, monkeypatch, capsys):
+def test_scenario_runs_sequentially_and_every_run_calls_backends(tmp_path, monkeypatch, capsys):
     from stopslop_demo import cli
     calls, assessments = [], []
     def jev(request):
@@ -45,62 +43,19 @@ def test_scenario_runs_sequentially_filters_then_blocks_and_replays_cache(tmp_pa
     settings = config()
     monkeypatch.setattr(cli.Settings, "load", lambda *a, **k: settings)
     monkeypatch.setattr(cli, "PolicyRouter", lambda s: PolicyRouter(s, httpx.MockTransport(upstream), httpx.MockTransport(jev)))
-    monkeypatch.setattr("sys.argv", ["stopslop-demo", "--scenario", "--color", "never", "--cache-dir", str(tmp_path)])
+    monkeypatch.setattr("sys.argv", ["stopslop-demo", "--scenario", "--color", "never"])
     cli.main()
     assert [len(body["messages"]) for body in calls] == [2, 4, 6]
     assert "[ANON:personal_name:" in calls[-1]["messages"][-1]["content"]
     assert len(assessments) == 4
-    assert len(list(tmp_path.glob("*.json"))) == 4
-    cli.main()
-    assert len(calls) == 3 and len(assessments) == 4
-    output = capsys.readouterr()
-    assert "cache=hit" in output.err and "Scenario complete" in output.err
-    assert "confidential_semantic" in output.err and "action=block" in output.err
-    assert "You [4, expected=block]" in output.out
-    for path in tmp_path.glob("*.json"):
-        assert "Bearer mock" not in path.read_text()
-    monkeypatch.setattr("sys.argv", ["stopslop-demo", "--scenario", "--no-cache", "--color", "never"])
     cli.main()
     assert len(calls) == 6 and len(assessments) == 8
+    output = capsys.readouterr()
+    assert "Scenario complete" in output.err
+    assert "confidential_semantic" in output.err and "action=block" in output.err
+    assert "You [4, expected=block]" in output.out
+    assert not list(tmp_path.glob("*.json"))
 
-
-def test_transient_errors_are_not_cached(tmp_path):
-    calls = []
-    def upstream(request):
-        calls.append(request)
-        return httpx.Response(503, json={"error": {"code": "jev_unavailable"}})
-    with httpx.Client(transport=DemoCache(httpx.MockTransport(upstream), tmp_path, "test")) as client:
-        for _ in range(2):
-            assert client.post("https://test/v1/chat/completions", json={}).status_code == 503
-    assert len(calls) == 2 and not list(tmp_path.glob("*.json"))
-
-
-def test_fingerprint_invalidates_policy_backend_and_mode(tmp_path):
-    settings = config()
-    initial = fingerprint(settings)
-    assert fingerprint(replace(settings, deterministic=True)) != initial
-    assert fingerprint(replace(settings, main_model="another-model")) != initial
-    policy = tmp_path / "policy.json"
-    policy.write_text(Path(settings.policy_file).read_text())
-    settings = replace(settings, policy_file=str(policy))
-    before = fingerprint(settings)
-    data = json.loads(policy.read_text())
-    data["rules"][-1]["threshold"] = 99
-    policy.write_text(json.dumps(data))
-    assert fingerprint(settings) != before
-
-
-def test_clean_removes_only_demo_cache(tmp_path):
-    spec = importlib.util.spec_from_file_location("demo_tasks", Path(__file__).resolve().parents[1] / "tools/demo_tasks.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    cache = tmp_path / ".cache" / "stopslop-demo"
-    cache.mkdir(parents=True)
-    (cache / "saved.json").write_text("{}")
-    keep = tmp_path / ".cache" / "other.txt"
-    keep.write_text("keep")
-    module.clean(tmp_path)
-    assert not cache.exists() and keep.read_text() == "keep"
 
 
 def test_spinner_stops_on_error(capsys):

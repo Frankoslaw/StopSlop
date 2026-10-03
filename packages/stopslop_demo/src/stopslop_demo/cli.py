@@ -9,7 +9,6 @@ from stopslop.router import PolicyRouter
 from .logs import configure_logs, configure_console
 from .spinner import Spinner, set_status
 from .scenarios import SCENARIOS
-from .cache import DemoCache, fingerprint
 import logging
 import time
 
@@ -52,8 +51,6 @@ def main():
     parser = argparse.ArgumentParser(description="NVIDIA chat with an in-process StopSlop router")
     parser.add_argument("prompt", nargs="?", help="Single prompt; omit for interactive chat")
     parser.add_argument("--scenario", nargs="?", const="nda", choices=SCENARIOS, help="Run scripted turns in order (default: nda)")
-    parser.add_argument("--cache-dir", default=".cache/stopslop-demo", help="Scenario cache directory")
-    parser.add_argument("--no-cache", action="store_true", help="Recheck every scenario turn and regenerate replies")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--policy", choices=POLICIES)
     parser.add_argument("--model", dest="main_model")
@@ -86,12 +83,11 @@ def main():
                     "deterministic only" if settings.deterministic else "jev (" + settings.jev_model + ")")
     except (ValueError, OSError) as error:
         parser.error(str(error))
-    transport = DemoCache(router, args.cache_dir, fingerprint(settings)) if args.scenario and not args.no_cache else router
     messages = [{"role": "system", "content": "You are a helpful assistant. Give concise plain-text replies, at most three short bullet points. Avoid tables and repeating prior answers."}]
     scenario = iter(SCENARIOS[args.scenario]) if args.scenario else None
     # This injection attaches policy enforcement without a server or local port.
     with OpenAI(base_url=settings.main_base_url, api_key=settings.main_key,
-                http_client=httpx.Client(transport=transport, timeout=settings.timeout),
+                http_client=httpx.Client(transport=router, timeout=settings.timeout),
                 timeout=settings.timeout, max_retries=0) as client:
         if args.prompt is None and scenario is None:
             print("NVIDIA chat. Type /quit to exit. Each turn is checked by the configured policies before the chat model runs.")
