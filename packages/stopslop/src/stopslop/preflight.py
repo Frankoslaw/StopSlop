@@ -1,6 +1,8 @@
 """Check optional semantic dependencies before starting an interactive service."""
 import importlib.util
 import sys
+from pathlib import Path
+from .repository import SQLiteRepository
 
 from .policy_loader import PolicyLoader
 
@@ -8,7 +10,12 @@ from .policy_loader import PolicyLoader
 def check_semantic_setup(settings):
     if settings.deterministic:
         return
-    definition = PolicyLoader(settings).load()
+    repository = SQLiteRepository(settings.state_file, read_only=True) if Path(settings.state_file).is_file() else None
+    try:
+        definition = PolicyLoader(settings, repository).load()
+    finally:
+        if repository:
+            repository.close()
     if not definition or not (definition.semantic_rules or
                              (definition.output_definition and definition.output_definition.semantic_rules)):
         return

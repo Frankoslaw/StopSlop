@@ -16,7 +16,7 @@ def configuration(tmp_path, classifier=None):
         data["classifier"] = classifier
     path = tmp_path / "policy.json"
     path.write_text(json.dumps(data))
-    return Settings(main_key="mock", policy_file=str(path), log_file=str(tmp_path / "audit.log"), metrics_file=str(tmp_path / "metrics.json"))
+    return Settings(main_key="mock", policy_file=str(path))
 
 
 def test_local_default_lazy_load_and_reuse(tmp_path, monkeypatch):

@@ -1,181 +1,47 @@
-# Output enforcement and adaptive policies
+# Governance and operating limits
 
-## Setup
+## Enforcement
 
-The shipped policy selects local Laya. Install and keep its optional dependencies:
+`policy.toml` uses `type = "builtin.email"` and other `builtin.` detector types for built-ins (including regex detectors) and generic `type = "regex"`/`"semantic"` rules with optional names. Legacy IDs remain supported internally and on import. It provides deterministic and semantic rules, output policies, approved models, token budgets and agent operation permissions. Configuration reload is validated before admission. In-flight input/output checks and all their quota reservations use the admitted policy snapshot, including semantic output assessments.
 
-```powershell
-uv sync --all-packages --extra laya
-uv run --no-sync pytest -q
-```
+Input and generated text are inspected; reasoning and refusal fields in every choice are included. Nontext/tool-call responses and malformed payloads fail closed. Regex matching has a 50 ms per-pattern timeout. The gateway authenticates before reading/parsing request bodies and bounds both requests and provider responses.
 
-The gateway and demo report a missing semantic dependency before accepting requests.
-To use the existing demo chat provider for assessment instead, change the policy's
-`classifier` to `llm`. `jev` requires its separate key. There is no automatic backend
-fallback. `--deterministic` deliberately disables semantic input and output rules.
-Tests mock classifiers; their passing results do not establish real model accuracy.
+Anonymous filtering covers detected spans only. Unknown names, obfuscations and formats can be missed. Tokens must be preserved exactly for restoration. Semantic filtering removes the entire flagged message because the classifier does not identify spans. Output checks happen before restoration so a caller can recover its own filtered values.
 
-## Output rules
+## State and quotas
 
-Every response is checked before delivery, including content, reasoning text, and
-refusals in every choice. Tool calls, nontext content, and malformed responses are
-rejected. Input rules apply to output by default: `block` becomes an output block,
-`filter` redacts newly generated matches, `allow` leaves matches unchanged, and
-`local`/`redirect` become blocks because an existing response cannot be rerouted.
-Per-rule exemptions remain scoped to their rule. Checks happen before exact anonymous
-tokens are restored, so legitimate round trips can restore a caller's own data.
+Every runtime uses one SQLite repository (`STOPSLOP_STATE_FILE`, default `stopslop.sqlite3`). All persistent telemetry and optional content logs live there. Atomic transactions coordinate local gateway workers and SDK processes. Original databases using `control_state` retain their quotas and suspensions; new telemetry tables are created alongside that state. Use an absolute path to avoid processes accidentally selecting different databases.
 
-Add an optional `output` object to a version 1 policy:
+Completed usage remains available across quota reloads and restarts. Fixed limits count within anchored intervals; rolling limits count tokens per second averaged across the window. Outstanding reservations count in every window until completion, including crash reservations. Failed responses with reported consumption are charged and attributed to their client. Failures without usage release admission; provider work may still have consumed resources that were not reported.
 
-```json
-{
-  "inherit_input": true,
-  "default_action": "block",
-  "rules": [
-    {"id": "secret", "action": "block_device"},
-    {"id": "profanity", "action": "warn"},
-    {"id": "unsafe_reply", "pattern": "execute_remote_payload", "action": "block"},
-    {"id": "output_exfiltration", "description": "Block instructions to transmit private organizational data to an unauthorized recipient.", "threshold": 85, "action": "block_device"}
-  ]
-}
-```
+Input reservations estimate UTF-8 bytes plus per-message overhead; output reservations use `max_tokens`, defaulting to 1024 under budgets. Chat usage reconciles provider counts when available. Semantic assessments use conservative estimates. These are token budgets, with no monetary pricing, GPU-time enforcement or distributed persistence guarantees.
 
-An existing input ID can be overridden without repeating its definition. New rules
-use `pattern` or `description`. Supported output actions are `block`, `block_device`,
-`warn`, `filter`, and `allow`; mixed matches use that precedence, with `allow` last.
-`default_action` sets the output consequence for inherited block/local rules and
-explicit rules without an action. `inherit_input: false` explicitly restricts output
-checks to the listed rules. `warn` records the violation and delivers the reply;
-`block` withholds it with HTTP 403 and `output_blocked`. Output evaluator failures
-withhold the reply. Already generated chat tokens remain charged even when a reply
-is blocked or assessment fails. Successful replies expose `X-StopSlop-Output-Action`,
-`X-StopSlop-Output-Rules`, and `X-StopSlop-Output-Risks`.
+`Repository` isolates persistence. Injecting another implementation is supported, but transaction semantics must preserve atomic quota admission. SQLite remains a local-disk backend. Remote agents can share one HTTP gateway's control decisions instead of sharing SQLite over a network filesystem.
 
-## Authenticated client suspension
+## Budget fallback
 
-Set `STOPSLOP_ACCESS_TOKENS` to a JSON object mapping stable client IDs to unique
-bearer tokens, supplied from the ignored `.env` or an external secret store. Clients
-send `Authorization: Bearer <client-token>`. Caller-provided device IDs and IP addresses
-do not determine identity. The upstream receives its configured provider key, never
-the client token. The demo uses `STOPSLOP_CLIENT_TOKEN` when set.
+Model-scoped limits can set `on_exhaustion = "fallback"` and use `[budget_fallback] route = "local"` or `"fallback"`. Local uses the configured loopback model; fallback uses the configured trusted provider. Models must remain approved. Admission retries once against every original budget, so global limits and fallback quotas cannot be bypassed. Input filtering and output protection remain enabled; local-only rules cannot become cloud requests. Budget decisions precede generation; provider errors never initiate another model call.
 
-`block_device` withholds the reply and suspends that authenticated client. Further
-calls return `device_blocked`; other clients can continue. Suspension persists when
-a shared state file is configured. Without authenticated identity, this action blocks
-the reply but cannot suspend a device. This is gateway client suspension, not operating
-system or firewall quarantine. Administrative reset is a local command:
+The optional `classifier` in `budget_fallback` explicitly selects semantic assessment when a paid evaluator is quota-bound, including generated-output assessment. Missing classifiers and invalid assessments fail closed. Quota snapshots remain fixed for each admitted request. Usage is recorded for the actual destination and assessment models. The shipped policy scopes its daily limit to the main model and enables a local fallback; operators must configure that installed local model. Add an unscoped hard cap if total usage must remain bounded across every model.
 
-```powershell
-uv run --no-sync --package stopslop stopslop-policy reset-client laptop-1 --state-file stopslop-state.sqlite3
-```
+## Agent tool, MCP and memory access
 
-The gateway defaults to localhost and refuses a non-loopback bind without configured
-client tokens. For remote use, also provide transport encryption through your normal
-TLS deployment. There is no unauthenticated HTTP reset endpoint.
+Permission rules identify authenticated clients, kind, resource, operation and allow/deny. Deny takes precedence; absence of an allow denies. The bearer token supplies identity. Suspended identities cannot authorize operations. The authenticated `/v1/authorize` endpoint and `AgentGuard` callbacks cover tool calls, MCP calls and memory read/write/delete. Audit records retain the decision and client identity without tool arguments or memory contents.
 
-## Model and quota governance
+Integrate the guard directly before each side effect. Registered resource names must map to trusted capabilities. This is an integration API, not an OS sandbox, generic MCP protocol proxy, or automatic interception of every memory library. Calls outside the guard are outside enforcement. A successful permission check does not prove that a callback executed safely.
 
-An optional `allowed_models` array lists approved chat model names, including any
-local/fallback destinations. With `--preserve-model`, arbitrary caller-selected models
-are rejected unless this list permits them; without a list, only the configured main
-model is permitted on the main route. Without `--preserve-model`, the main model is
-pinned as before. Budget `models` selectors only scope accounting and do not grant
-model permission. The shipped policy includes an unscoped daily total-token budget
-so model selectors cannot leave another model outside that overall cap.
+## Reporting and chat logs
 
-The gateway defaults to `stopslop-state.sqlite3`. Configure the same absolute
-`STOPSLOP_STATE_FILE` across gateway workers, SDK/demo processes, and administrative
-generation to share quota admission and client suspensions on one host. SQLite
-transactions make admission atomic across processes. Completed usage is timestamped
-at completion. Pending reservations count in every window until finished, including
-across fixed resets and rolling-window expiry. A restart does not reset quotas.
+Sessions and metrics, full timestamped violation history, completion audits and incident metadata are stored in SQLite. `slopstop-top` offers Overview, Violations and Chats tabs with list/detail scrolling. Audit export writes JSON to stdout; there are no automatic export files. The monitor is read-only.
 
-Semantic assessments reserve budget under their classifier model name before calling
-the classifier. Their token counts are conservative estimates of conversation and
-question overhead plus structured output, not provider-reported billing. Chat and
-generation calls reconcile estimates with provider usage when available. This is token
-governance, not currency pricing or a GPU-compute limiter. Errors without usage release
-the reservation; providers may charge for work they do not report. SQLite state is
-intended for a shared local disk, not distributed hosts or a network filesystem.
+Content logging is opt-in through `--log-chats` / `STOPSLOP_LOG_CHATS`. It stores original inputs and delivered replies, including restored caller data. A blocked attempt records input and status, with no delivered response. Authorization headers, configured provider credentials and replacement dictionaries are excluded. Inputs can themselves contain credentials or personal information; logging does not redact those originals. Protect the database through deployment file permissions. Existing logs remain when logging is turned off.
 
-Crash reservations remain charged conservatively. Inspect and release one only after
-its owner process has exited:
+## Incident-driven controls
 
-```powershell
-uv run --no-sync --package stopslop stopslop-policy reservations --state-file stopslop-state.sqlite3
-uv run --no-sync --package stopslop stopslop-policy release-orphan RESERVATION_ID --state-file stopslop-state.sqlite3
-```
+Incident recording, optional generated policies and their activation use the same repository. Generation is an explicit administrative call, bounded to the latest 100 incident metadata records and one provider request. It accepts only restrictive new IDs and escaped literals or semantic descriptions. It cannot replace base controls, add exemptions, change allowed models, budgets or permissions, or disable output inheritance. Invalid generations preserve the prior overlay; consumed generation tokens are still accounted.
 
-Release refuses reservations owned by a live or unknown process. An exited gateway
-does not prove that a remote provider has stopped processing: verify that work has
-ended before invoking release. PID reuse can conservatively prevent release.
+Externally managed policy feeds remain supported as configuration files. Text signatures recognize selected prompt-injection, deserialization, shell-execution and unsafe model-loading constructs. They neither execute code nor scan model repositories. Quoted code can match; real security controls must also constrain execution in the host application.
 
-## Live reload and historical attack controls
+## Validation
 
-Base policy and optional complementary policy files are validated on change and
-reloaded for the next request. A malformed update fails new requests closed; it does
-not silently remove protections. In-flight output checks keep their admitted policy
-snapshot. Use atomic file replacement when editing feeds. Legacy `--rules-file`
-configuration still loads at startup.
-
-The shipped policy demonstrates signatures for instruction override, unsafe
-`pickle`/`dill` loading, explicitly unsafe `torch.load`, and shell-execution constructs,
-plus a semantic execution/exfiltration rule. These are deliberately restrictive
-textual controls: even quoted unsafe code can match a signature. They do not execute
-or remediate code, authenticate MCP calls, inspect model repositories, or prove that a
-device executed a command. External agents must report actual execution or leak events.
-
-These examples address risks described by [OWASP's prompt injection guidance](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html),
-[OWASP's output-handling guidance](https://owasp.github.io/www-project-top-10-for-large-language-model-applications/2_0_vulns/LLM05_ImproperOutputHandling),
-and [PyTorch's security policy](https://github.com/pytorch/pytorch/security/policy).
-Their tests verify specific signatures and benign descriptions, not comprehensive
-coverage of every historical exploit.
-
-## Generate `policy.dyn.json`
-
-Enable automatic metadata recording and optional complementary enforcement:
-
-```powershell
-uv run --no-sync --package stopslop stopslop --policy-file policy.json --incident-file incidents.jsonl --dynamic-policy-file policy.dyn.json
-```
-
-The dynamic file may initially be absent. Input blocks and output violations append
-incident metadata without prompts, outputs, credentials, or anonymous mappings.
-External agents/operators can report confirmed incidents:
-
-```powershell
-uv run --no-sync --package stopslop stopslop-policy record --kind code_execution --rule shell_execution --incidents incidents.jsonl
-uv run --no-sync --package stopslop stopslop-policy record --kind data_leak --rule email --incidents incidents.jsonl
-uv run --no-sync --package stopslop stopslop-policy generate --incidents incidents.jsonl --policy-file policy.json --output policy.dyn.json
-```
-
-Generation is explicit and makes one bounded, non-retried call to the same chat
-provider/model configured for the demo. It sends the latest 100 incident metadata
-records plus the base and existing dynamic policies, not raw incident content.
-It shares quotas when configured with the gateway's state file. There are no automatic
-learning calls on the request path. To repeat generation on a schedule, invoke this
-command through your administrative scheduler.
-
-The model may propose deterministic literals or semantic descriptions. Literal
-signatures are escaped locally; unrestricted generated regexes are rejected. Only new
-`dyn_` IDs and restrictive actions are accepted. Generated input rules cannot override
-base/built-in IDs, add exceptions, change models/budgets/classifiers, or disable inherited
-output protection. Output additions can block replies or suspend authenticated clients.
-Invalid generations and provider errors preserve the previous file. Writers are
-serialized, and successful updates replace the file atomically while retaining prior
-dynamic rules. Loading a configured dynamic file activates its validated rules on the
-next request. Without `--dynamic-policy-file`, generation produces a separate artifact
-for inspection only. Model-generated semantic rules can still be overbroad or inaccurate;
-validate them with your own allowed/blocked examples before enabling a generated feed.
-
-## Reporting
-
-The terminal monitor shows active controls, thresholds, shared quota scopes, recent
-input/output decisions, tokens, failures, and latency. Snapshots retain the latest
-1,000 violations, and audit files rotate at 5 MiB with five backups. Decision records
-include direction, action, client identity where known, rules, semantic risk, and
-model where available. Request-completion records include usage and latency. No
-conversation content or credentials are logged. Use a separate audit path per worker
-or a central logging collector for heavy multiworker deployments; the built-in file
-rotation is local to each process. Financial costs and semantic accuracy benchmarks
-are not inferred from these metrics.
+The automated suite uses mocked providers and classifiers. It checks positive/negative enforcement cases, admission across processes, reload races, persisted consumption, failure accounting, request limits, regex timeouts, opt-in content logging, permission callbacks and TUI pagination. Passing tests does not establish real classifier precision/recall or production exploit coverage. Performance and real-model accuracy still need measurement on the intended deployment; future scalability is outside this change.

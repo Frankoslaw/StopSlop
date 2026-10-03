@@ -30,17 +30,20 @@ class Settings:
     jev_key: str = ""
     jev_base_url: str = "https://api.typesafe.ai/v1"
     jev_model: str = "jev-latest"
-    log_file: str = "stopslop.log"
-    metrics_file: str = "metrics.json"
     preserve_model: bool = False
-    state_file: str = ""
+    state_file: str = "stopslop.sqlite3"
+    log_chats: bool = False
+    max_request_bytes: int = 2097152
+    max_response_bytes: int = 4194304
     access_tokens: str = ""
     client_token: str = ""
     dynamic_policy_file: str = ""
-    incident_file: str = ""
     timeout: float = 120.0
 
     def __post_init__(self):
+        for name in ("max_request_bytes", "max_response_bytes"):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         if self.classifier not in ("laya", "jev", "llm"):
             raise ValueError("classifier must be laya, jev or llm")
         if self.policy not in POLICIES:
@@ -70,11 +73,12 @@ class Settings:
         for name in cls.__dataclass_fields__:
             value = os.getenv("STOPSLOP_" + name.upper())
             if value is not None:
-                if name in ("deterministic", "preserve_model"):
+                if name in ("deterministic", "preserve_model", "log_chats"):
                     if value.lower() not in ("true", "false", "1", "0"):
                         raise ValueError("STOPSLOP_DETERMINISTIC must be true or false")
                     values[name] = value.lower() in ("true", "1")
                 else:
-                    values[name] = float(value) if name == "timeout" else value
+                    values[name] = (float(value) if name == "timeout" else int(value)
+                                    if name in ("max_request_bytes", "max_response_bytes") else value)
         values.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**values)

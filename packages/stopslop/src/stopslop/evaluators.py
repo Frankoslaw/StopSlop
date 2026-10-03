@@ -38,7 +38,7 @@ def assessment(messages, rules, probabilities, target_start=0):
 
 
 class LLMEvaluator:
-    """Optional OpenAI-compatible scaffold, injected explicitly; never selected by demo.
+    """Optional OpenAI-compatible evaluator, selected by policy or injected explicitly.
 
     Uses the existing chat provider configuration by default, including NVIDIA.
     LLM probabilities are self-reported estimates, unlike Jev's typed Noul output.

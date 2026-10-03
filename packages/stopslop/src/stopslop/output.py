@@ -56,10 +56,24 @@ def inspect_output(policy, route, body):
         semantic.update({rule["id"]: rule for rule in explicit.semantic_rules})
     already_blocked = any(a in ("block", "block_device") for hits in decisions for _, a in hits)
     if semantic and route.evaluator and generated and not already_blocked:
+        active_evaluator = route.evaluator
         try:
-            matches, all_risks = policy.assess(route.evaluator, context + generated, list(semantic.values()), len(context))
+            try:
+                matches, all_risks = policy.assess(route.evaluator, context + generated, list(semantic.values()), len(context),
+                                                 budgets=route.budgets, client_id=route.client_id)
+            except PolicyError as error:
+                if not policy.can_budget_fallback(error, definition) or not definition.budget_fallback.get("classifier"):
+                    raise
+                evaluator = policy.evaluator_for(definition.budget_fallback["classifier"])
+                if evaluator is route.evaluator:
+                    raise
+                active_evaluator = evaluator
+                matches, all_risks = policy.assess(evaluator, context + generated, list(semantic.values()), len(context),
+                                                 budgets=route.budgets, client_id=route.client_id)
+                policy.runtime.audit("assessment_budget_fallback", direction="output", client_id=route.client_id,
+                                     model=evaluator.model, rules=error.rules)
         except EvaluationError:
-            raise PolicyError(f"{route.evaluator.name}_unavailable", 503) from None
+            raise PolicyError(f"{active_evaluator.name}_unavailable", 503) from None
         for index, hits in enumerate(matches[len(context):]):
             decisions[index].extend((hit, action(hit.rule_id)) for hit in hits)
         risks = {name: risk for name, risk in all_risks.items()

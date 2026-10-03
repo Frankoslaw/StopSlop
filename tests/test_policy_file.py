@@ -127,7 +127,7 @@ def test_invalid_policy_rejected_at_startup(tmp_path, rules):
 
 def test_shipped_policy():
     policy = Policy(Settings(main_key="cloud", local_model="small-local",
-                             policy_file=str(Path(__file__).resolve().parents[1] / "policy.json"), deterministic=True))
+                             policy_file=str(Path(__file__).resolve().parents[1] / "policy.toml"), deterministic=True))
     assert policy.route(payload("Hello")).action == "allow"
     assert policy.route(payload("jane@example.org")).action == "filter"
     assert policy.route(payload("shit")).action == "local"

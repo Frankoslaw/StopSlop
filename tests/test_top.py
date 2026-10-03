@@ -8,9 +8,9 @@ from stopslop.top import budget_usage, dashboard, process_alive, read_sessions
 
 
 def test_concurrent_sessions_and_shutdown(tmp_path):
-    path = tmp_path / "metrics.json"
-    first = Runtime(path, log_file=None)
-    second = Runtime(path, log_file=None)
+    path = tmp_path / "state.sqlite3"
+    first = Runtime(state_file=path)
+    second = Runtime(state_file=path)
     ticket = first.reserve({"model": "test", "messages": [{"content": "hi"}], "max_tokens": 6})
     sessions, warnings = read_sessions(path)
     assert not warnings and len(sessions) == 2
@@ -36,7 +36,7 @@ def test_monitor_accounts_reservations_model_scope_and_idle_expiry():
 
 
 def test_waiting_and_unreadable_snapshots_render(tmp_path):
-    path = tmp_path / "metrics.json"
+    path = tmp_path / "state.sqlite3"
     assert read_sessions(path) == ([], [])
     console = Console(width=100, record=True)
     console.print(dashboard([], []))
@@ -44,7 +44,9 @@ def test_waiting_and_unreadable_snapshots_render(tmp_path):
     path.write_text("{")
     sessions, warnings = read_sessions(path)
     assert not sessions and len(warnings) == 1
-    path.write_text(json.dumps({"started_at": 1, "closed": True, "violations": []}))
+    path.unlink()
+    runtime = Runtime(state_file=path)
+    runtime.close()
     sessions, warnings = read_sessions(path)
     console.print(dashboard(sessions, warnings))
     assert "finished" in console.export_text()

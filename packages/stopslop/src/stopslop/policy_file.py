@@ -1,11 +1,13 @@
 """Validated, local per-rule policy configuration. Regex rules and optional semantic rules."""
 import json
-import re
+import regex as re
 from importlib.resources import files
-from pathlib import Path
 
 from .rules import Detector
 from .runtime import validate_budgets
+from .policy_format import read_policy
+from .permissions import validate_permissions
+from .policy_schema import normalize_policy
 
 ACTIONS = {"allow", "filter", "local", "block"}
 
@@ -13,15 +15,26 @@ ACTIONS = {"allow", "filter", "local", "block"}
 class PolicyFile:
     def __init__(self, path: str = "", *, data=None):
         if data is None:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or set(data) - {"version", "default_action", "rules", "budgets", "classifier", "allowed_models", "output"}:
+            data = read_policy(path)
+        data = normalize_policy(data)
+        if not isinstance(data, dict) or set(data) - {"version", "default_action", "rules", "budgets", "classifier", "allowed_models", "output", "permissions", "budget_fallback"}:
             raise ValueError("Invalid policy file fields")
         if type(data.get("version")) is not int or data["version"] != 1 or not isinstance(data.get("default_action", "block"), str) or data.get("default_action", "block") not in ACTIONS:
             raise ValueError("Policy requires version 1 and a valid default_action")
         self.classifier = data.get("classifier")
         if "classifier" in data and (not isinstance(self.classifier, str) or self.classifier not in ("laya", "jev", "llm")):
             raise ValueError("classifier must be laya, jev or llm")
+        self.permissions = validate_permissions(data.get("permissions", {}))
         self.budgets = validate_budgets(data.get("budgets", []))
+        self.budget_fallback = data.get("budget_fallback")
+        if self.budget_fallback is not None:
+            fallback = self.budget_fallback
+            if (not isinstance(fallback, dict) or set(fallback) - {"route", "classifier"}
+                    or fallback.get("route") not in ("local", "fallback")
+                    or "classifier" in fallback and fallback["classifier"] not in ("laya", "jev", "llm")):
+                raise ValueError("budget_fallback requires route local/fallback and an optional classifier")
+        if any(b.get("on_exhaustion") == "fallback" for b in self.budgets) and not self.budget_fallback:
+            raise ValueError("on_exhaustion fallback requires a budget_fallback configuration")
         self.allowed_models = data.get("allowed_models")
         if "allowed_models" in data and (not isinstance(self.allowed_models, list) or not self.allowed_models
                 or any(not isinstance(m, str) or not m for m in self.allowed_models)):
@@ -109,7 +122,7 @@ class PolicyFile:
         return [hit for hit in self.detector.scan(text, on_rule)
                 if not any(m.start() <= hit.start and hit.end <= m.end()
                            for pattern in self.exceptions.get(hit.rule_id, [])
-                           for m in pattern.finditer(text))]
+                           for m in pattern.finditer(text, timeout=0.05))]
 
     def action_for(self, rule_id):
         return self.actions.get(rule_id, self.default_action)

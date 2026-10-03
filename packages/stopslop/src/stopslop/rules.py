@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from importlib.resources import files
 import json
-import re
+import regex as re
 
 @dataclass(frozen=True)
 class Match:
@@ -54,7 +54,7 @@ class Detector:
             if on_rule:
                 on_rule(rule_id)
             hits.extend(Match(rule_id, match.start(), match.end())
-                        for match in pattern.finditer(text)
+                        for match in pattern.finditer(text, timeout=0.05)
                         if valid_identifier(match.group(), validator))
         return hits
 

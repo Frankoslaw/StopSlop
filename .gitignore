@@ -205,3 +205,6 @@ stopslop.log
 *.sqlite3-shm
 incidents.jsonl
 policy.dyn.json
+
+# Optional exported generated policy configuration
+policy.dyn.toml

@@ -1,10 +1,10 @@
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import logging
+import math
 import re
 import json
 import hmac
-from pathlib import Path
 from threading import Lock
 from .config import Settings
 from .runtime import Runtime
@@ -37,6 +37,9 @@ class Route:
     definition: object = field(default=None, repr=False)
     detector: object = field(default=None, repr=False)
     evaluator: object = field(default=None, repr=False)
+    budgets: tuple = field(default_factory=tuple, repr=False)
+    original_messages: list = field(default_factory=list, repr=False)
+    budget_fallback: str = ""
 
     def restore(self, body):
         """Restore exact tokens locally, in one pass (never cascade replacements)."""
@@ -56,12 +59,21 @@ class Route:
         return visit(body)
 
 class Policy:
-    def __init__(self, settings: Settings, jev_transport=None, evaluator: SemanticEvaluator | None = None):
+    def __init__(self, settings: Settings, jev_transport=None, evaluator: SemanticEvaluator | None = None, repository=None):
+        try:
+            self._initialize(settings, jev_transport, evaluator, repository)
+        except BaseException:
+            if hasattr(self, "runtime"):
+                self.runtime.close()
+            raise
+
+    def _initialize(self, settings, jev_transport, evaluator, repository):
         self.settings = settings
         self.detector = Detector(settings.rules_file)
-        self.loader = PolicyLoader(settings)
+        self.runtime = Runtime(state_file=settings.state_file, repository=repository)
+        self.loader = PolicyLoader(settings, self.runtime.repository)
         self.definition = self.loader.load()
-        self.incident_lock = Lock()
+        self.evaluator_lock = Lock()
         self.tokens = json.loads(settings.access_tokens) if settings.access_tokens else {}
         self.injected_evaluator = evaluator
         self.jev_transport = jev_transport
@@ -86,8 +98,7 @@ class Policy:
                     (self.definition.output_definition and self.definition.output_definition.semantic_rules)) and not settings.jev_key):
             raise ValueError("Semantic policies require STOPSLOP_JEV_KEY")
         self.evaluator_cache[classifier] = self.evaluator
-        self.runtime = Runtime(settings.metrics_file, self.definition.budgets if self.definition else [],
-                               log_file=settings.log_file, state_file=settings.state_file)
+        self.runtime.budgets = self.definition.budgets if self.definition else []
         self.update_controls(self.definition)
         self.runtime.write()
 
@@ -105,6 +116,9 @@ class Policy:
             self.runtime.controls += [dict(id=rid, action=a, direction="output",
                                            enabled=not (self.settings.deterministic and rid in semantic_ids))
                                       for rid, a in definition.output_actions.items()]
+            self.runtime.controls += [dict(id=rule["id"], action=rule["action"], direction=rule["kind"],
+                                           enabled=True, resource=rule["resource"], clients=rule["clients"],
+                                           operations=rule["operations"]) for rule in definition.permissions]
 
     def authenticate(self, authorization):
         if not self.tokens:
@@ -117,27 +131,28 @@ class Policy:
         raise PolicyError("unauthorized_client", 401)
 
     def record_incident(self, kind, rules, **details):
-        if not self.settings.incident_file:
-            return
-        # Evidence is metadata only: no prompts, outputs, tokens, or credentials.
-        from datetime import datetime, timezone
-        incident = dict(time=datetime.now(timezone.utc).isoformat(), kind=kind, rules=list(rules), **details)
-        with self.incident_lock:
-            path = Path(self.settings.incident_file)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(incident) + "\n")
+        self.runtime.repository.append("incident", self.runtime.clock(), self.runtime.session_id,
+                                       dict(kind=kind, rules=list(rules), **details))
 
-    def assess(self, evaluator, messages, rules, target_start=0):
+    def authorize_operation(self, client_id, kind, resource, operation):
+        from .permissions import authorize_operation
+        try:
+            definition = self.loader.load()
+        except (OSError, ValueError, TypeError, KeyError):
+            raise PolicyError("invalid_policy_configuration", 503) from None
+        return authorize_operation(self, definition, client_id, kind, resource, operation)
+
+    def assess(self, evaluator, messages, rules, target_start=0, budgets=(), client_id=""):
+        budgets = tuple(deepcopy(budgets))
         ticket = ""
-        if self.runtime.budgets:
+        if budgets:
             from .jev import violation_questions
             supports_targets = hasattr(evaluator, "assess_targets")
             questions = violation_questions(messages, rules, target_start if supports_targets else 0)
             assessment_payload = {"model": evaluator.model, "messages": [
                 {"content": json.dumps({"state": {"messages": messages}, "questions": questions}) + " " * 2048}],
                 "max_tokens": max(2048, len(questions) * 128)}
-            ticket = self.runtime.reserve(assessment_payload)
+            ticket = self.runtime.reserve(assessment_payload, budgets=budgets, client_id=client_id)
         try:
             result = (evaluator.assess_targets(messages, rules, target_start)
                       if target_start and hasattr(evaluator, "assess_targets") else evaluator.assess(messages, rules))
@@ -149,9 +164,62 @@ class Policy:
             self.runtime.finish(ticket, action="assessment")
         return result
 
+    def finish(self, route, body=None, action=None, failed=False, response=None, status=None):
+        action = action or ("budget_fallback" if route.budget_fallback else route.action)
+        self.runtime.finish(route.ticket, body, action, failed)
+        if self.settings.log_chats:
+            self.runtime.log_chat(route.original_messages, response, client_id=route.client_id,
+                                  model=route.payload["model"], action=action,
+                                  status=status or ("failed" if failed else "completed"), ticket=route.ticket)
+
+    def evaluator_for(self, classifier):
+        if self.settings.deterministic:
+            return None
+        with self.evaluator_lock:
+            if classifier not in self.evaluator_cache:
+                self.evaluator_cache[classifier] = (LayaEvaluator(self.settings) if classifier == "laya"
+                                                    else LLMEvaluator(self.settings) if classifier == "llm"
+                                                    else JevEvaluator(self.settings, self.jev_transport))
+            if classifier == "jev" and not self.settings.jev_key:
+                raise PolicyError("missing_evaluator_key", 503)
+            return self.evaluator_cache[classifier]
+
+    @staticmethod
+    def can_budget_fallback(error, definition):
+        return (error.code == "budget_exceeded" and definition and definition.budget_fallback
+                and any(b["id"] in error.rules and b.get("on_exhaustion", "block") == "fallback"
+                        for b in definition.budgets))
+
+    def fallback_route(self, route, definition, allow_same_model=False):
+        target = definition.budget_fallback["route"]
+        # A privacy rule requiring local execution must never become a cloud request.
+        if route.action == "local" and target != "local":
+            raise PolicyError("budget_fallback_not_allowed", 403)
+        settings = self.settings
+        if target == "local":
+            base, model, key = settings.local_base_url, settings.local_model, settings.local_key
+        else:
+            base, model, key = settings.fallback_base_url, settings.fallback_model, settings.fallback_key
+        if not all((base, model, key)):
+            raise PolicyError("missing_budget_fallback", 503)
+        if model == route.payload["model"] and not allow_same_model:
+            raise PolicyError("budget_fallback_same_model", 429)
+        if definition.allowed_models and model not in definition.allowed_models:
+            raise PolicyError("model_not_allowed", 403)
+        payload = deepcopy(route.payload)
+        payload["model"] = model
+        payload.pop("reasoning_budget", None)
+        evaluator = route.evaluator
+        if definition.budget_fallback.get("classifier"):
+            evaluator = self.evaluator_for(definition.budget_fallback["classifier"])
+        return replace(route, payload=payload, base_url=base, key=key, evaluator=evaluator, budget_fallback=target)
+
     def inspect_output(self, route, body):
         from .output import inspect_output
-        return inspect_output(self, route, body)
+        try:
+            return inspect_output(self, route, body)
+        except TimeoutError:
+            raise PolicyError("rule_timeout", 503) from None
 
     def route(self, payload, client_id="") -> Route:
         self.runtime.request_started()
@@ -168,12 +236,42 @@ class Policy:
             self.definition = definition
             self.runtime.budgets = definition.budgets if definition else []
             self.update_controls(definition)
-            route = self._route(payload, definition, client_id)
-            ticket = self.runtime.reserve(route.payload, started_at=started_at)
-            if self.runtime.budgets:
+            budgets = tuple(deepcopy(definition.budgets)) if definition else ()
+            route = None
+            try:
+                route = self._route(payload, definition, client_id)
+                ticket = self.runtime.reserve(route.payload, started_at=started_at, budgets=budgets, client_id=client_id)
+            except PolicyError as error:
+                if not self.can_budget_fallback(error, definition):
+                    raise
+                # When assessment admission failed, re-run all checks with the explicitly configured classifier.
+                assessment_failed = route is None
+                if assessment_failed:
+                    if not definition.budget_fallback.get("classifier"):
+                        raise
+                    route = self._route(payload, definition, client_id, fallback_assessment=True)
+                route = self.fallback_route(route, definition, allow_same_model=assessment_failed)
+                # Preserve every limit: model-scoped limits may exclude the cheaper destination; hard caps do not.
+                ticket = self.runtime.reserve(route.payload, started_at=started_at, budgets=budgets, client_id=client_id)
+                self.runtime.violation("budget_fallback", error.rules, direction="input", action="fallback",
+                                       client_id=client_id, model=route.payload["model"], backend=route.budget_fallback)
+                logger.warning("Budget %s exhausted; chat backend=%s model=%s", ",".join(error.rules),
+                               route.budget_fallback, route.payload["model"])
+                logger.info("Generating response", extra={"progress":
+                            f"Generating response [{route.budget_fallback}: {route.payload['model']}]"})
+            if budgets:
                 route.payload.setdefault("max_tokens", 1024)
-            return replace(route, ticket=ticket, client_id=client_id)
+            return replace(route, ticket=ticket, client_id=client_id, budgets=budgets,
+                           original_messages=deepcopy(payload["messages"]) if self.settings.log_chats else [])
+        except TimeoutError:
+            self.runtime.violation("rule_timeout", [], direction="input", action="block", client_id=client_id)
+            raise PolicyError("rule_timeout", 503) from None
         except PolicyError as error:
+            if self.settings.log_chats and isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+                messages = [{"role": message.get("role", "unknown"), "content": message["content"]}
+                            for message in payload["messages"] if isinstance(message, dict)
+                            and isinstance(message.get("content"), str)]
+                self.runtime.log_chat(messages, client_id=client_id, status=error.code, action="block")
             self.runtime.violation(error.code, error.rules, direction="input", client_id=client_id,
                                    action="block", risks=error.risks, backend="none",
                                    thresholds={r["id"]: r["threshold"] for r in definition.semantic_rules
@@ -182,18 +280,23 @@ class Policy:
                 self.record_incident("input_violation", error.rules, direction="input", action="block")
             raise
 
-    def _route(self, payload, definition=None, client_id="") -> Route:
+    def _route(self, payload, definition=None, client_id="", fallback_assessment=False) -> Route:
         detector = definition.detector if definition else self.detector
         classifier = (definition.classifier if definition else None) or self.settings.classifier
+        if fallback_assessment:
+            classifier = definition.budget_fallback["classifier"]
         evaluator = self.injected_evaluator
+        if fallback_assessment:
+            evaluator = self.evaluator_for(classifier)
         if self.settings.deterministic:
             evaluator = None
         elif evaluator is None:
-            if classifier not in self.evaluator_cache:
-                self.evaluator_cache[classifier] = (LayaEvaluator(self.settings) if classifier == "laya"
-                                                    else LLMEvaluator(self.settings) if classifier == "llm"
-                                                    else JevEvaluator(self.settings, self.jev_transport))
-            evaluator = self.evaluator_cache[classifier]
+            with self.evaluator_lock:
+                if classifier not in self.evaluator_cache:
+                    self.evaluator_cache[classifier] = (LayaEvaluator(self.settings) if classifier == "laya"
+                                                        else LLMEvaluator(self.settings) if classifier == "llm"
+                                                        else JevEvaluator(self.settings, self.jev_transport))
+                evaluator = self.evaluator_cache[classifier]
             semantic = definition and (definition.semantic_rules or
                        (definition.output_definition and definition.output_definition.semantic_rules))
             if classifier == "jev" and semantic and not self.settings.jev_key:
@@ -201,6 +304,10 @@ class Policy:
         allowed = {"model", "messages", "temperature", "top_p", "max_tokens", "stream", "reasoning_budget"}
         if not isinstance(payload, dict) or set(payload) - allowed or payload.get("stream", False) is not False:
             raise PolicyError("unsupported_payload", 400)
+        for name, maximum in (("temperature", 2), ("top_p", 1)):
+            if name in payload and (type(payload[name]) not in (int, float)
+                                    or not math.isfinite(payload[name]) or not 0 <= payload[name] <= maximum):
+                raise PolicyError("invalid_" + name, 400)
         if "reasoning_budget" in payload and (type(payload["reasoning_budget"]) is not int or not -1 <= payload["reasoning_budget"] <= 32768):
             raise PolicyError("invalid_reasoning_budget", 400)
         if "model" in payload and (not isinstance(payload["model"], str) or not payload["model"]):
@@ -243,7 +350,7 @@ class Policy:
                     for rule in semantic_rules:
                         progress(rule["id"], rule["description"], evaluator.name)
             try:
-                semantic, risks = self.assess(evaluator, messages, definition.semantic_rules)
+                semantic, risks = self.assess(evaluator, messages, definition.semantic_rules, budgets=definition.budgets, client_id=client_id)
             except EvaluationError:
                 logger.error("backend=%s model=%s evaluation failed; chat backend not called", evaluator.name, evaluator.model)
                 raise PolicyError(f"{evaluator.name}_unavailable", 503) from None

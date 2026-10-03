@@ -12,6 +12,8 @@ import httpx
 
 from .config import Settings
 from .policy_loader import merge_policy
+from .policy_format import read_policy, policy_toml
+from .repository import SQLiteRepository
 
 KINDS = {"code_execution", "data_leak", "prompt_injection", "unsafe_deserialization",
          "supply_chain", "input_violation", "output_violation"}
@@ -28,13 +30,14 @@ def validate_incident(value):
             "direction": value.get("direction") if value.get("direction") in ("input", "output") else "external"}
 
 
-def record_incident(path, kind, rules=()):
+def record_incident(state_file, kind, rules=()):
     value = validate_incident({"kind": kind, "rules": list(rules)})
-    value["time"] = datetime.now(timezone.utc).isoformat()
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(value) + "\n")
+    import time
+    repository = SQLiteRepository(state_file)
+    try:
+        repository.append("incident", time.time(), "admin", value)
+    finally:
+        repository.close()
 
 
 def generated_rules(data):
@@ -72,32 +75,23 @@ def generated_rules(data):
     return result
 
 
-def generate_policy(settings, incidents_path, base_path, output_path="policy.dyn.json", transport=None):
-    base = json.loads(Path(base_path).read_text(encoding="utf-8"))
+def generate_policy(settings, base_path, output_path=None, transport=None):
+    """Generate into SQLite; optionally export an editable configuration artifact."""
+    base = read_policy(base_path)
     from .policy_file import PolicyFile
+    from .runtime import Runtime
     definition = PolicyFile(data=base)
-    incidents = []
-    with Path(incidents_path).open(encoding="utf-8") as stream:
-        for line in stream:
-            if len(line) > 16384:
-                raise ValueError("Incident record is too large")
-            if line.strip():
-                incidents.append(validate_incident(json.loads(line)))
-                incidents = incidents[-100:]
-    if not incidents or not settings.main_key:
-        raise ValueError("Generation requires incidents and a main model key")
+    if output_path and Path(output_path).resolve() == Path(base_path).resolve():
+        raise ValueError("Dynamic policy must not overwrite base policy")
     if definition.allowed_models and settings.main_model not in definition.allowed_models:
         raise ValueError("Generation model is not allowed by the base policy")
-    target = Path(output_path)
-    if target.resolve() == Path(base_path).resolve():
-        raise ValueError("Dynamic policy must not overwrite base policy")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # Generation is explicit, never called during live requests. Serialize writers.
-    with sqlite3.connect(str(target) + ".lock.sqlite3", timeout=30) as db:
-        db.execute("CREATE TABLE IF NOT EXISTS writer_lock (id INTEGER)")
-        db.commit()
-        db.execute("BEGIN IMMEDIATE")
-        previous = json.loads(target.read_text(encoding="utf-8")) if target.exists() else {"version": 1, "rules": []}
+    runtime = Runtime(definition.budgets, state_file=settings.state_file)
+    repository = runtime.repository
+    try:
+        incidents = [validate_incident(record) for record in repository.records("incident", 100)]
+        if not incidents or not settings.main_key:
+            raise ValueError("Generation requires incidents and a main model key")
+        previous = repository.dynamic_policy()
         merge_policy(base, previous)
         payload = {"model": settings.main_model, "temperature": 0, "max_tokens": 2048, "stream": False,
                    "messages": [
@@ -115,80 +109,115 @@ def generate_policy(settings, incidents_path, base_path, output_path="policy.dyn
                    ]}
         if settings.main_model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning":
             payload["reasoning_budget"] = 0
-        from .runtime import Runtime
-        runtime = Runtime(None, definition.budgets, log_file=None, state_file=settings.state_file)
         ticket = runtime.reserve(payload)
+        body = None
         try:
             with httpx.Client(timeout=settings.timeout, transport=transport, follow_redirects=False) as client:
                 response = client.post(settings.main_base_url.rstrip("/") + "/chat/completions",
                                        headers={"Authorization": f"Bearer {settings.main_key}"}, json=payload)
+                try:
+                    body = response.json()
+                except ValueError:
+                    pass
                 response.raise_for_status()
-                body = response.json()
                 runtime.finish(ticket, body, action="policy_generation")
                 candidate = generated_rules(json.loads(body["choices"][0]["message"]["content"]))
-            combined = {"version": 1, "rules": previous.get("rules", []) + candidate["rules"],
-                        "output": {"rules": previous.get("output", {}).get("rules", []) + candidate.get("output", {}).get("rules", [])}}
-            merge_policy(base, combined)
+            # Re-read inside the transaction to retain rules from simultaneous generators.
+            with repository.transaction():
+                previous = repository.dynamic_policy()
+                combined = {"version": 1, "rules": previous.get("rules", []) + candidate["rules"],
+                            "output": {"rules": previous.get("output", {}).get("rules", [])
+                                       + candidate.get("output", {}).get("rules", [])}}
+                merge_policy(base, combined)
+                repository.save_dynamic_policy(combined)
         except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
-            runtime.finish(ticket, failed=True)
+            runtime.finish(ticket, body, action="policy_generation", failed=True)
             raise ValueError("Policy generation failed; existing policy was preserved") from None
-        finally:
-            runtime.close()
-        temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
-        try:
-            temporary.write_text(json.dumps(combined, indent=2) + "\n", encoding="utf-8")
-            os.replace(temporary, target)
-        finally:
-            temporary.unlink(missing_ok=True)
+        if output_path:
+            target = Path(output_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+            try:
+                temporary.write_text(policy_toml(combined) if target.suffix == ".toml" else json.dumps(combined, indent=2),
+                                     encoding="utf-8")
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
         return combined
+    finally:
+        runtime.close()
+
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     record = commands.add_parser("record", help="Record a confirmed event from an external agent or operator")
-    record.add_argument("--incidents", default="incidents.jsonl")
+    record.add_argument("--state-file")
     record.add_argument("--kind", choices=sorted(KINDS), required=True)
     record.add_argument("--rule", action="append", default=[])
     generate = commands.add_parser("generate", help="Explicitly send incident metadata and policies to the demo model")
     generate.add_argument("--env-file", default=".env")
-    generate.add_argument("--incidents", default="incidents.jsonl")
-    generate.add_argument("--policy-file", default="policy.json")
-    generate.add_argument("--output", default="policy.dyn.json")
+    generate.add_argument("--policy-file", default="policy.toml")
+    generate.add_argument("--output", help="Optional TOML export; rules are stored and activated in SQLite")
     generate.add_argument("--state-file", help="Use the gateway's shared quota state")
     reset = commands.add_parser("reset-client", help="Clear a client's suspension in persistent state")
     reset.add_argument("client_id")
-    reset.add_argument("--state-file", default="stopslop-state.sqlite3")
+    reset.add_argument("--state-file")
     reservations = commands.add_parser("reservations", help="List outstanding quota reservations without conversation content")
-    reservations.add_argument("--state-file", default="stopslop-state.sqlite3")
+    reservations.add_argument("--state-file")
     release = commands.add_parser("release-orphan", help="Release a reservation only after its owner process has exited")
     release.add_argument("ticket")
-    release.add_argument("--state-file", default="stopslop-state.sqlite3")
+    release.add_argument("--state-file")
+    export = commands.add_parser("export", help="Export audit, violations, incidents or opted-in chats as JSON")
+    export.add_argument("kind", choices=("audit", "violation", "incident", "chat"))
+    export.add_argument("--state-file")
+    migrate = commands.add_parser("migrate", help="Import legacy telemetry/feeds into SQLite; source files stay intact")
+    migrate.add_argument("--state-file")
+    for option in ("metrics-file", "audit-file", "incidents-file", "dynamic-policy-file", "policy-file"):
+        migrate.add_argument("--" + option)
+    for command in (record, reset, reservations, release, export, migrate):
+        command.add_argument("--env-file", default=".env")
     args = parser.parse_args()
     try:
+        settings = Settings.load(args.env_file, state_file=args.state_file)
+        args.state_file = settings.state_file
         if args.command == "record":
-            record_incident(args.incidents, args.kind, args.rule)
+            record_incident(args.state_file, args.kind, args.rule)
             print("Incident recorded")
         elif args.command == "generate":
-            from dataclasses import replace
-            settings = Settings.load(args.env_file, state_file=args.state_file)
-            if not settings.state_file:
-                settings = replace(settings, state_file="stopslop-state.sqlite3")
-            generate_policy(settings, args.incidents, args.policy_file, args.output)
-            print(f"Validated complementary policy saved to {args.output}")
+            generate_policy(settings, args.policy_file, args.output)
+            print("Validated complementary policy saved in " + settings.state_file)
+        elif args.command == "export":
+            repository = SQLiteRepository(args.state_file, read_only=True)
+            try:
+                print(json.dumps(repository.records(args.kind, repository.count(args.kind)), indent=2))
+            finally:
+                repository.close()
+        elif args.command == "migrate":
+            from .migrate import import_legacy
+            repository = SQLiteRepository(args.state_file)
+            try:
+                print(json.dumps(import_legacy(repository, metrics_file=args.metrics_file, audit_file=args.audit_file,
+                                              incidents_file=args.incidents_file, dynamic_policy_file=args.dynamic_policy_file,
+                                              base_policy_file=args.policy_file)))
+            finally:
+                repository.close()
         else:
             from .runtime import Runtime
-            runtime = Runtime(None, log_file=None, state_file=args.state_file)
-            if args.command == "reset-client":
-                runtime.reset_client(args.client_id)
-                print("Client suspension cleared")
-            elif args.command == "reservations":
-                print(json.dumps({ticket: {"usage": event, "owner": runtime.pending_owners.get(ticket)}
-                                  for ticket, event in runtime.pending.items()}, indent=2))
-            else:
-                runtime.release_orphan(args.ticket)
-                print("Orphan reservation released")
-            runtime.close()
+            runtime = Runtime(state_file=args.state_file)
+            try:
+                if args.command == "reset-client":
+                    runtime.reset_client(args.client_id)
+                    print("Client suspension cleared")
+                elif args.command == "reservations":
+                    print(json.dumps({ticket: {"usage": event, "owner": runtime.pending_owners.get(ticket)}
+                                      for ticket, event in runtime.pending.items()}, indent=2))
+                else:
+                    runtime.release_orphan(args.ticket)
+                    print("Orphan reservation released")
+            finally:
+                runtime.close()
     except (OSError, ValueError, sqlite3.Error) as error:
         parser.error(str(error))
 

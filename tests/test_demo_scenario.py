@@ -13,8 +13,8 @@ from stopslop_demo.spinner import Spinner
 
 
 def config():
-    return Settings(metrics_file="", classifier="jev", main_key="mock", jev_key="mock", policy_file=str(
-        Path(__file__).resolve().parents[1] / "policy.json"))
+    return Settings(classifier="jev", main_key="mock", jev_key="mock", policy_file=str(
+        Path(__file__).resolve().parents[1] / "policy.toml"))
 
 
 def completion():

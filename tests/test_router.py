@@ -98,7 +98,7 @@ def test_semantic_cases_use_jev_probabilities_and_enforce_actions(case):
             name: {"type": "noul", "noul": .95 if name.endswith(case.semantic_rule) else .01}
             for name in body["questions"]}})
     configuration = Settings(classifier="jev", main_key="cloud", jev_key="test", policy_file=str(
-        Path(__file__).resolve().parents[1] / "policy.json"))
+        Path(__file__).resolve().parents[1] / "policy.toml"))
     from stopslop.jev import JevEvaluator
     policy = Policy(configuration, evaluator=JevEvaluator(configuration, httpx.MockTransport(jev)))
     payload = {"messages": [{"role": "user", "content": case.prompt}]}

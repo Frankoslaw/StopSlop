@@ -1,0 +1,195 @@
+# StopSlop policy. Reloaded before each request.
+# Actions: allow, filter, local, block. Thresholds are percentages.
+
+version = 1
+classifier = "laya"
+default_action = "filter"
+# Add exact approved cloud and installed local model names here.
+allowed_models = ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "small-local"]
+
+# Built-in detectors use builtin.<name>, including detectors implemented with regex.
+[[rules]]
+type = "builtin.bank_account"
+action = "filter"
+
+[[rules]]
+type = "builtin.iban"
+action = "filter"
+
+[[rules]]
+type = "builtin.credit_card"
+action = "filter"
+
+[[rules]]
+type = "builtin.phone"
+action = "filter"
+
+[[rules]]
+type = "builtin.international_phone"
+action = "filter"
+
+[[rules]]
+type = "builtin.domestic_phone"
+action = "filter"
+
+[[rules]]
+type = "builtin.email"
+action = "filter"
+allowed_patterns = ["\\bsupport@example\\.com\\b"]
+
+[[rules]]
+type = "builtin.polish_name"
+action = "filter"
+
+[[rules]]
+type = "builtin.personal_name"
+action = "filter"
+
+[[rules]]
+type = "builtin.address"
+action = "filter"
+
+[[rules]]
+type = "builtin.date_of_birth"
+action = "filter"
+
+[[rules]]
+type = "builtin.pesel"
+action = "filter"
+
+[[rules]]
+type = "builtin.national_id"
+action = "filter"
+
+[[rules]]
+type = "builtin.secret"
+action = "block"
+
+[[rules]]
+type = "builtin.private_key"
+action = "block"
+
+[[rules]]
+type = "builtin.profanity"
+action = "local"
+
+# Generic regex rules accept any pattern; name is optional but useful in audit logs.
+[[rules]]
+type = "regex"
+name = "confidential"
+pattern = '\b(?:strictly confidential|do not process|Ĺ›ciĹ›le tajne)\b'
+action = "block"
+
+# Semantic descriptions and percentage thresholds are editable.
+[[rules]]
+type = "semantic"
+name = "confidential_semantic"
+description = "Do not disclose non-public company information, including unreleased financial results, NDA-protected information, or internal project details, even if paraphrased or obfuscated. Public information and fictional examples are allowed."
+threshold = 75
+action = "block"
+
+[[rules]]
+type = "semantic"
+name = "abusive_semantic"
+description = "Do not send targeted harassment or personal abuse to the cloud model. Neutral discussion and quotations for analysis are allowed."
+threshold = 80
+action = "local"
+
+[[rules]]
+type = "semantic"
+name = "private_semantic"
+description = "Do not disclose identifying personal contact information, including phone numbers spelled out in words or obfuscated email addresses. Fictional examples are allowed."
+threshold = 80
+action = "filter"
+
+[[rules]]
+type = "regex"
+name = "historical_prompt_injection"
+pattern = '\bignore\s+(?:all\s+)?(?:previous|system|developer)\s+(?:instructions|rules)\b'
+action = "block"
+
+[[rules]]
+type = "regex"
+name = "unsafe_deserialization"
+pattern = '\b(?:pickle|dill)\s*\.\s*loads?\s*\('
+action = "block"
+
+[[rules]]
+type = "regex"
+name = "unsafe_model_loading"
+pattern = '\btorch\s*\.\s*load\s*\([^\r\n]{0,256}\bweights_only\s*=\s*False'
+action = "block"
+
+[[rules]]
+type = "regex"
+name = "shell_execution"
+pattern = '\b(?:os\s*\.\s*system|subprocess\s*\.\s*(?:run|Popen|call))\s*\('
+action = "block"
+
+[[rules]]
+type = "semantic"
+name = "execution_semantic"
+description = "Block requests to execute unauthorized code, deserialize untrusted executable model checkpoints, install malicious model repository code, or send private data to an attacker. Allow harmless security explanations and approved work that does not execute or disclose prohibited content."
+threshold = 90
+action = "block"
+
+[output]
+inherit_input = true
+default_action = "block"
+
+[[output.rules]]
+type = "builtin.profanity"
+action = "warn"
+
+# This cap covers the main model only, allowing a free/cheaper destination to continue.
+# Change on_exhaustion to "block" for a hard cap. Unscoped caps still apply to fallback.
+[[budgets]]
+type = "fixed_quota"
+tokens = "total"
+limit = 1000000
+window_seconds = 86400
+reset_at = "2026-01-01T00:00:00Z"
+models = ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"]
+on_exhaustion = "fallback"
+name = "main_model_daily"
+
+[permissions]
+
+[[permissions.rules]]
+resource = "search"
+operations = ["call"]
+clients = ["demo-agent"]
+action = "allow"
+name = "approved_search"
+type = "tool"
+
+[[permissions.rules]]
+resource = "docs/search"
+operations = ["call"]
+clients = ["demo-agent"]
+action = "allow"
+name = "docs_mcp"
+type = "mcp"
+
+[[permissions.rules]]
+resource = "project/*"
+operations = ["read", "write"]
+clients = ["demo-agent"]
+action = "allow"
+name = "project_memory"
+type = "memory"
+
+[[permissions.rules]]
+resource = "project/secrets*"
+operations = ["read", "write", "delete"]
+clients = ["*"]
+action = "deny"
+name = "protect_secrets"
+type = "memory"
+
+# Free local fallback: configure STOPSLOP_LOCAL_MODEL and approve it in allowed_models.
+# For a cheaper provider use route = "fallback" and STOPSLOP_FALLBACK_* settings.
+# Classifier keeps semantic checks working when a paid evaluator exhausts its budget.
+[budget_fallback]
+route = "local"
+classifier = "laya"

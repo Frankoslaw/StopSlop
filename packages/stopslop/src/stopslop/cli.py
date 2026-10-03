@@ -16,12 +16,10 @@ def main():
         parser.add_argument("--" + name)
     parser.add_argument("--timeout", type=float)
     parser.add_argument("--deterministic", action="store_true", default=None)
-    parser.add_argument("--log-file")
-    parser.add_argument("--metrics-file")
     parser.add_argument("--preserve-model", action="store_true", default=None)
+    parser.add_argument("--log-chats", action="store_true", default=None, help="Store request messages and delivered replies in SQLite")
     parser.add_argument("--state-file", default=None, help="Shared persistent quota and client suspension state")
     parser.add_argument("--dynamic-policy-file", help="Complementary rules; reloads atomically on change")
-    parser.add_argument("--incident-file", help="Record safe event metadata for optional rule generation")
     parser.add_argument("--json-logs", action="store_true")
     args = vars(parser.parse_args())
     json_logs = args.pop("json_logs")
@@ -36,9 +34,6 @@ def main():
             loopback = host.lower() == "localhost"
         if not loopback and not settings.access_tokens:
             raise ValueError("A non-loopback gateway requires STOPSLOP_ACCESS_TOKENS")
-        from dataclasses import replace
-        if not settings.state_file:
-            settings = replace(settings, state_file="stopslop-state.sqlite3")
         from .preflight import check_semantic_setup
         check_semantic_setup(settings)
         app = create_app(settings)

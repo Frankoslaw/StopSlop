@@ -3,6 +3,7 @@ import argparse
 import json
 import math
 import os
+import sqlite3
 import sys
 import time
 from datetime import datetime
@@ -13,6 +14,9 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from .repository import SQLiteRepository
+from .terminal_keys import keyboard
+from .viewer import Viewer
 
 from .config import Settings
 
@@ -46,18 +50,21 @@ def process_alive(pid):
 
 
 def read_sessions(path):
-    directory = path.with_name(path.name + ".sessions")
-    paths = sorted(directory.glob("*.json")) if directory.exists() else ([path] if path.exists() else [])
-    sessions, warnings = [], []
-    for source in paths:
+    if not Path(path).exists():
+        return [], []
+    try:
+        repository = SQLiteRepository(path, read_only=True)
         try:
-            data = json.loads(source.read_text(encoding="utf-8"))
-            if not isinstance(data, dict) or not isinstance(data.get("started_at"), (int, float)):
-                raise ValueError("Invalid runtime snapshot")
-            sessions.append(data)
-        except (OSError, ValueError) as error:
-            warnings.append(f"Cannot read {source.name}: {error}")
-    return sessions, warnings
+            sessions = repository.sessions()
+            state = repository.load_state()
+            for session in sessions:
+                session.update(usage_events=state["events"], reservations=list(state["pending"].values()),
+                               blocked_clients=len(state.get("blocked_clients", [])))
+            return sessions, []
+        finally:
+            repository.close()
+    except (OSError, ValueError, sqlite3.Error) as error:
+        return [], [f"Cannot read database: {error}"]
 
 
 def budget_usage(session, budget, now):
@@ -148,14 +155,14 @@ def dashboard(sessions, warnings, now=None):
     for title in ("Control", "Direction", "Action", "Threshold"):
         controls.add_column(title)
     latest = max(active, key=lambda s: s.get("updated_at", 0), default={})
-    for control in latest.get("controls", [])[:40]:
+    for control in latest.get("controls", []):
         controls.add_row(Text(control["id"]), control["direction"], control["action"] if control.get("enabled", True) else "disabled",
                          f"{control['threshold']:g}%" if "threshold" in control else "deterministic")
     if not controls.row_count:
         controls.add_row("Waiting for policy controls", "", "", "")
     return Group(Panel(summary, title="[bold cyan]slopstop-top[/] · LIVE", subtitle="Ctrl+C to quit · totals include saved sessions"),
                  Panel(processes, title="Sessions · latest 8"), Panel(limits, title="Quota usage · active sessions"),
-                 Panel(controls, title="Active controls · latest active policy · first 40"),
+                 Panel(controls, title="Active controls · latest active policy"),
                  Panel(recent, title="Recent violations · latest 8"),
                  Panel(Text("\n".join(alerts) or "No warnings", style="yellow" if alerts else "green"), title="Warnings"))
 
@@ -164,25 +171,41 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Browse StopSlop metrics, violations and opted-in chats")
     parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--metrics-file", help="Same metrics path used by the demo or gateway")
-    parser.add_argument("--interval", type=float, default=.5, help="Refresh interval in seconds (default: 0.5)")
-    parser.add_argument("--once", action="store_true", help="Print one snapshot and exit")
+    parser.add_argument("--state-file", help="Database used by the gateway and demo")
+    parser.add_argument("--interval", type=float, default=.5)
+    parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     if not math.isfinite(args.interval) or args.interval <= 0:
         parser.error("--interval must be finite and positive")
-    path = Path(args.metrics_file or Settings.load(args.env_file).metrics_file)
+    path = Path(args.state_file or Settings.load(args.env_file).state_file)
     console = Console()
-    def render():
-        return dashboard(*read_sessions(path))
-    if args.once or not console.is_terminal:
-        console.print(render())
+    if args.once or not console.is_terminal or not sys.stdin.isatty():
+        console.print(dashboard(*read_sessions(path)))
         return
+    viewer = Viewer()
+
+    def render():
+        repository = SQLiteRepository(path, read_only=True) if path.exists() else None
+        try:
+            return viewer.render(repository, console)
+        finally:
+            if repository:
+                repository.close()
+
     try:
-        with Live(render(), console=console, screen=True, auto_refresh=False) as live:
+        with keyboard() as read_key, Live(render(), console=console, screen=True, auto_refresh=False) as live:
+            refreshed = 0
             while True:
-                time.sleep(args.interval)
-                live.update(render(), refresh=True)
+                key = read_key()
+                if key and not viewer.key(key):
+                    break
+                if key or time.monotonic() - refreshed >= args.interval:
+                    live.update(render(), refresh=True)
+                    refreshed = time.monotonic()
+                time.sleep(.03)
     except KeyboardInterrupt:
         pass
+    except (OSError, sqlite3.Error) as error:
+        console.print(Text(f"Cannot read database: {error}", style="red"))

@@ -63,7 +63,7 @@ def main():
     parser.add_argument("--local-model")
     parser.add_argument("--local-base-url")
     parser.add_argument("--dynamic-policy-file")
-    parser.add_argument("--incident-file")
+    parser.add_argument("--log-chats", action="store_true", default=None, help="Store request messages and delivered replies in SQLite")
     parser.add_argument("--state-file")
     args = parser.parse_args()
     if args.max_tokens <= 0:
@@ -77,9 +77,9 @@ def main():
         settings = Settings.load(args.env_file, policy=args.policy, main_model=args.main_model, timeout=args.timeout,
                                  policy_file=args.policy_file, local_model=args.local_model, local_base_url=args.local_base_url,
                                  deterministic=args.deterministic, dynamic_policy_file=args.dynamic_policy_file,
-                                 incident_file=args.incident_file, state_file=args.state_file)
-        if not settings.policy_file and not settings.rules_file and args.policy is None and Path("policy.json").is_file():
-            settings = replace(settings, policy_file="policy.json")
+                                 log_chats=args.log_chats, state_file=args.state_file)
+        if not settings.policy_file and not settings.rules_file and args.policy is None and Path("policy.toml").is_file():
+            settings = replace(settings, policy_file="policy.toml")
         if not settings.main_key:
             parser.error("Set STOPSLOP_MAIN_KEY in .env or the environment")
         router = PolicyRouter(settings)

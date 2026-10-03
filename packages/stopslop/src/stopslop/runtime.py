@@ -1,17 +1,14 @@
-"""Thread-safe process-wide budgets and atomic runtime snapshots."""
-import logging
-import json
+"""Quota admission and telemetry through one transactional repository."""
 import math
 import os
 import time
 import uuid
-import sqlite3
 import hashlib
-from logging.handlers import RotatingFileHandler
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
+from .repository import SQLiteRepository
 import structlog
 
 log = structlog.get_logger("stopslop.audit")
@@ -22,11 +19,13 @@ def validate_budgets(entries):
         raise ValueError("budgets must be an array")
     ids = set()
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) - {"id", "type", "tokens", "limit", "window_seconds", "reset_at", "models"}:
+        if not isinstance(entry, dict) or set(entry) - {"id", "type", "tokens", "limit", "window_seconds", "reset_at", "models", "on_exhaustion"}:
             raise ValueError("Invalid budget fields")
         if not isinstance(entry.get("id"), str) or not entry["id"] or entry["id"] in ids:
             raise ValueError("Budget IDs must be unique nonempty strings")
         ids.add(entry["id"])
+        if entry.get("on_exhaustion", "block") not in ("block", "fallback"):
+            raise ValueError("Budget on_exhaustion must be block or fallback")
         if entry.get("type") not in ("rolling_average", "fixed_quota") or entry.get("tokens", "total") not in ("input", "output", "total"):
             raise ValueError("Invalid budget type or token selector")
         for name in ("limit", "window_seconds"):
@@ -47,31 +46,18 @@ def validate_budgets(entries):
 
 
 class Runtime:
-    def __init__(self, path, budgets=(), clock=time.time, log_file="stopslop.log", state_file=""):
-        self.path = Path(path) if path else None
+    def __init__(self, budgets=(), clock=time.time, state_file="stopslop.sqlite3", repository=None):
         self.budgets = budgets
         self.clock = clock
-        audit = logging.getLogger("stopslop.runtime." + uuid.uuid4().hex)
-        audit.setLevel(logging.INFO)
-        audit.propagate = False
-        if log_file:
-            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-            handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(message)s"))
-            audit.addHandler(handler)
-        self.audit = structlog.wrap_logger(audit, processors=[structlog.processors.TimeStamper(fmt="iso"), structlog.processors.JSONRenderer()])
-        self.audit_logger = audit
         self.lock = RLock()
         self.events = []
         self.pending = {}
         self.own_pending = set()
         self.pending_owners = {}
         self.blocked_clients = set()
-        self.state_file = state_file
-        if state_file:
-            Path(state_file).parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(state_file, timeout=30) as db:
-                db.execute("CREATE TABLE IF NOT EXISTS control_state (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)")
+        self.state_file = str(state_file or ":memory:")
+        self.repository = repository or SQLiteRepository(self.state_file)
+        self.owns_repository = repository is None
         self.session_id = uuid.uuid4().hex
         self.closed = False
         self.stats = dict(started_at=clock(), requests=0, completed=0, failures=0,
@@ -84,30 +70,19 @@ class Runtime:
 
     @contextmanager
     def state(self):
-        """SQLite serializes admission across workers and preserves outstanding work.
-
-        Unfinished reservations survive crashes conservatively; no time-based release.
-        """
-        with self.lock:
-            if not self.state_file:
+        """Serialize admission and suspension across all users of the repository."""
+        with self.lock, self.repository.transaction():
+            data = self.repository.load_state()
+            self.events = data["events"]
+            self.pending = data["pending"]
+            self.pending_owners = data.get("pending_owners", {})
+            self.blocked_clients = set(data.get("blocked_clients", []))
+            try:
                 yield
-                return
-            with sqlite3.connect(self.state_file, timeout=30) as db:
-                db.execute("BEGIN IMMEDIATE")
-                row = db.execute("SELECT value FROM control_state WHERE id=1").fetchone()
-                if row:
-                    data = json.loads(row[0])
-                    self.events = data["events"]
-                    self.pending = data["pending"]
-                    self.pending_owners = data.get("pending_owners", {})
-                    self.blocked_clients = set(data.get("blocked_clients", []))
-                try:
-                    yield
-                finally:
-                    value = json.dumps(dict(events=self.events, pending=self.pending,
-                                            pending_owners=self.pending_owners,
-                                            blocked_clients=sorted(self.blocked_clients)))
-                    db.execute("INSERT OR REPLACE INTO control_state VALUES (1, ?)", (value,))
+            finally:
+                self.repository.save_state(dict(events=self.events, pending=self.pending,
+                                                pending_owners=self.pending_owners,
+                                                blocked_clients=sorted(self.blocked_clients)))
 
     def authorize_client(self, client_id):
         from .policy import PolicyError
@@ -139,41 +114,49 @@ class Runtime:
         with self.lock:
             self.stats["requests"] += 1
 
+    def snapshot(self):
+        return {**self.stats, "updated_at": self.clock(),
+                "in_flight": len(self.own_pending.intersection(self.pending)),
+                "session_id": self.session_id, "pid": os.getpid(), "closed": self.closed,
+                "budgets": list(self.budgets), "usage_events": self.events,
+                "reservations": list(self.pending.values()), "shared_state": self.state_file != ":memory:",
+                "budget_scope": hashlib.sha256(str(Path(self.state_file).resolve()).encode()).hexdigest()[:12]
+                                if self.state_file != ":memory:" else self.session_id,
+                "blocked_clients": len(self.blocked_clients), "controls": self.controls}
+
     def write(self):
-        if self.path:
-            snapshot = {**self.stats, "updated_at": self.clock(), "in_flight": len(self.own_pending.intersection(self.pending)),
-                        "session_id": self.session_id, "pid": os.getpid(), "closed": self.closed,
-                        "budgets": list(self.budgets), "usage_events": self.events,
-                        "reservations": list(self.pending.values()),
-                        "shared_state": bool(self.state_file),
-                        "budget_scope": hashlib.sha256(str(Path(self.state_file).resolve()).encode()).hexdigest()[:12] if self.state_file else self.session_id,
-                        "blocked_clients": len(self.blocked_clients), "controls": self.controls}
-            directory = self.path.with_name(self.path.name + ".sessions")
-            directory.mkdir(parents=True, exist_ok=True)
-            for target in (self.path, directory / (self.session_id + ".json")):
-                temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
-                temporary.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-                os.replace(temporary, target)
+        self.repository.save_session(self.session_id, self.snapshot())
 
     def close(self):
         with self.lock:
+            if self.closed:
+                return
             self.closed = True
             self.write()
-            for handler in list(self.audit_logger.handlers):
-                handler.close()
-                self.audit_logger.removeHandler(handler)
+            if self.owns_repository:
+                self.repository.close()
+
+    def audit(self, event, **details):
+        self.repository.append("audit", self.clock(), self.session_id, dict(event=event, **details))
+
+    def log_chat(self, messages, response=None, **details):
+        # Explicit opt-in; authorization headers and replacement dictionaries never enter this API.
+        self.repository.append("chat", self.clock(), self.session_id,
+                               dict(messages=messages, response=response, **details))
 
     def violation(self, code, rules, **details):
         with self.lock:
             self.stats["violation_count"] += 1
             self.stats["violations"].append(dict(time=self.clock(), code=code, rules=list(rules), **details))
             self.stats["violations"] = self.stats["violations"][-1000:]
-            self.audit.warning("policy_violation", code=code, rules=list(rules), **details)
+            self.repository.append("violation", self.clock(), self.session_id, dict(code=code, rules=list(rules), **details))
+            self.audit("policy_violation", code=code, rules=list(rules), **details)
             console_details = {key: value for key, value in details.items() if key not in ("risks", "thresholds")}
             log.warning("policy_violation", code=code, rules=list(rules), **console_details)
             self.write()
 
-    def reserve(self, payload, started_at=None):
+    def reserve(self, payload, started_at=None, budgets=None, client_id=""):
+        budgets = self.budgets if budgets is None else budgets
         from .policy import PolicyError
         with self.state():
             now = self.clock()
@@ -183,9 +166,8 @@ class Runtime:
             if type(out) is not int or out <= 0:
                 raise PolicyError("invalid_max_tokens", 400)
             model = payload.get("model")
-            horizon = max((b["window_seconds"] for b in self.budgets), default=0)
-            self.events = [e for e in self.events if e[0] > now - horizon]
-            for b in self.budgets:
+            # Keep usage history when limits change or are temporarily disabled.
+            for b in budgets:
                 if b.get("models") and model not in b["models"]:
                     continue
                 window = b["window_seconds"]
@@ -207,7 +189,7 @@ class Runtime:
             ticket = uuid.uuid4().hex
             self.pending[ticket] = (now if started_at is None else started_at, model, inp, out)
             self.own_pending.add(ticket)
-            self.pending_owners[ticket] = {"pid": os.getpid(), "session_id": self.session_id}
+            self.pending_owners[ticket] = {"pid": os.getpid(), "session_id": self.session_id, "client_id": client_id}
             self.write()
             return ticket
 
@@ -215,7 +197,7 @@ class Runtime:
         with self.state():
             event = self.pending.pop(ticket, None)
             self.own_pending.discard(ticket)
-            self.pending_owners.pop(ticket, None)
+            owner = self.pending_owners.pop(ticket, {})
             if event is None:
                 return
             now, model, inp, out = event
@@ -228,14 +210,17 @@ class Runtime:
                     if type(value) is int and value >= 0:
                         return value
                 return default
-            inp = count("prompt_tokens", "input_tokens", default=inp)
-            out = count("completion_tokens", "output_tokens", default=out)
-            if not failed:
+            reported = isinstance(usage, dict) and any(type(usage.get(name)) is int and usage[name] >= 0
+                       for name in ("prompt_tokens", "input_tokens", "completion_tokens", "output_tokens", "total_tokens"))
+            # Partial reports retain estimates for missing components rather than treating them as free.
+            inp = count("prompt_tokens", "input_tokens", default=0 if failed and not reported else inp)
+            out = count("completion_tokens", "output_tokens", default=0 if failed and not reported else out)
+            charged = not failed or reported
+            if charged:
                 self.events.append((self.clock(), model, inp, out))
-                horizon = max((b["window_seconds"] for b in self.budgets), default=0)
-                self.events = [e for e in self.events if e[0] > self.clock() - horizon]
                 self.stats["input_tokens"] += inp
                 self.stats["output_tokens"] += out
+            if not failed:
                 self.stats["assessment_calls" if action == "assessment" else "completed"] += 1
                 if action == "assessment":
                     self.stats["estimated_assessment_input_tokens"] += inp
@@ -244,7 +229,8 @@ class Runtime:
                 actions[action] = actions.get(action, 0) + 1
             else:
                 self.stats["assessment_failures" if action == "assessment" else "failures"] += 1
-            self.audit.info("request_finished", model=model, action=action, failed=failed,
-                            input_tokens=inp if not failed else 0, output_tokens=out if not failed else 0,
-                            latency_seconds=max(0, self.clock() - now))
+            self.audit("request_finished", model=model, action=action, failed=failed,
+                       client_id=owner.get("client_id", ""), ticket=ticket,
+                       input_tokens=inp if charged else 0, output_tokens=out if charged else 0,
+                       latency_seconds=latency)
             self.write()

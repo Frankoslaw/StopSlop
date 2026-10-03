@@ -4,9 +4,12 @@ from pathlib import Path
 from threading import Lock
 
 from .policy_file import PolicyFile
+from .policy_format import read_policy
+from .policy_schema import normalize_policy
 
 
 def merge_policy(base, dynamic):
+    base, dynamic = normalize_policy(base), normalize_policy(dynamic)
     if (not isinstance(dynamic, dict) or set(dynamic) - {"version", "rules", "output"}
             or type(dynamic.get("version")) is not int or dynamic["version"] != 1):
         raise ValueError("Dynamic policy must contain version 1, rules and optional output rules")
@@ -32,7 +35,8 @@ def merge_policy(base, dynamic):
 
 
 class PolicyLoader:
-    def __init__(self, settings):
+    def __init__(self, settings, repository=None):
+        self.repository = repository
         if settings.dynamic_policy_file and not settings.policy_file:
             raise ValueError("dynamic_policy_file requires policy_file")
         self.paths = [Path(settings.policy_file)] if settings.policy_file else []
@@ -44,14 +48,17 @@ class PolicyLoader:
 
     def load(self):
         with self.lock:
-            signature = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None for p in self.paths)
+            overlay = self.repository.dynamic_policy() if self.repository else None
+            signature = (json.dumps(overlay, sort_keys=True),) + tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None for p in self.paths)
             if signature == self.signature:
                 return self.definition
             if not self.paths:
                 return None
-            data = json.loads(self.paths[0].read_text(encoding="utf-8"))
+            data = read_policy(self.paths[0])
+            if overlay and (overlay.get("rules") or overlay.get("output", {}).get("rules")):
+                data = merge_policy(data, overlay)
             if len(self.paths) > 1 and self.paths[1].exists():
-                data = merge_policy(data, json.loads(self.paths[1].read_text(encoding="utf-8")))
+                data = merge_policy(data, read_policy(self.paths[1]))
             definition = PolicyFile(data=data)
             self.definition, self.signature = definition, signature
             return definition

@@ -19,8 +19,12 @@ incident-to-policy generation, live policy reload, a terminal dashboard, exporta
 audit metadata, automated positive/negative tests, and an interactive NVIDIA demo.
 See [governance](governance.md) for configuration and operating limits.
 
-Still outside the demonstrated scope: direct MCP/tool/memory permissions, operating
-system quarantine, repository scanning, distributed quota state, financial pricing,
+AgentGuard and an authenticated authorization endpoint now provide explicit tool/MCP
+and memory operation permissions. The TUI supports scrollable violation and opted-in
+chat history; runtime state is consolidated in one SQLite repository.
+
+Still outside the demonstrated scope: operating system quarantine, repository
+scanning, distributed quota storage, financial pricing,
 and measured real-classifier accuracy. Tests mock upstreams/classifiers; no claim of
 comprehensive exploit detection or production readiness follows from passing tests.
 

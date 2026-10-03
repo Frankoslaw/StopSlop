@@ -11,6 +11,7 @@ from stopslop.policy import Policy, PolicyError
 from stopslop.proxy import create_app
 from stopslop.router import PolicyRouter
 from stopslop.runtime import Runtime
+from stopslop.repository import SQLiteRepository
 from stopslop.evaluators import assessment
 
 
@@ -18,8 +19,7 @@ def configuration(tmp_path, **policy_fields):
     path = tmp_path / "policy.json"
     path.write_text(json.dumps({"version": 1, "default_action": "filter", "rules": [
         {"id": "secret", "action": "block"}], **policy_fields}))
-    return Settings(main_key="upstream-secret", policy_file=str(path), deterministic=True,
-                    metrics_file=str(tmp_path / "metrics.json"), log_file=str(tmp_path / "audit.log"))
+    return Settings(main_key="upstream-secret", policy_file=str(path), deterministic=True )
 
 
 def payload(text="Hello", model=None):
@@ -88,7 +88,7 @@ def test_explicit_output_action_and_authenticated_suspension(tmp_path, kind, act
             other.authenticate("Bearer token-a")
         other.runtime.reset_client("device-a")
         assert other.authenticate("Bearer token-a") == "device-a"
-    assert "execute malicious code" not in (tmp_path / "audit.log").read_text()
+    assert "execute malicious code" not in json.dumps(SQLiteRepository(settings.state_file).records("audit"))
     assert policy.runtime.stats["requests"] == 3
 
 
@@ -164,7 +164,7 @@ def test_pending_budget_cannot_age_out_and_completion_is_charged_now(tmp_path, k
     budget = dict(id="b", type=kind, tokens="output", limit=10 if kind == "fixed_quota" else 1, window_seconds=10)
     if kind == "fixed_quota":
         budget["reset_at"] = "1970-01-01T00:00:00Z"
-    runtime = Runtime(None, [budget], lambda: now[0], log_file=None)
+    runtime = Runtime([budget], lambda: now[0])
     ticket = runtime.reserve(payload())
     now[0] = 120
     with pytest.raises(PolicyError, match="budget_exceeded"):
@@ -181,7 +181,7 @@ def test_persistent_shared_admission_is_atomic_and_survives_restart(tmp_path):
     budget = dict(id="b", type="fixed_quota", tokens="output", limit=10, window_seconds=86400,
                   reset_at="1970-01-01T00:00:00Z")
     path = str(tmp_path / "state.sqlite3")
-    first, second = [Runtime(None, [budget], lambda: 100, log_file=None, state_file=path) for _ in range(2)]
+    first, second = [Runtime([budget], lambda: 100, state_file=path) for _ in range(2)]
     def reserve(runtime):
         try:
             return runtime.reserve(payload())
@@ -190,7 +190,7 @@ def test_persistent_shared_admission_is_atomic_and_survives_restart(tmp_path):
     with ThreadPoolExecutor(2) as pool:
         tickets = list(pool.map(reserve, [first, second]))
     assert sum(t is not None for t in tickets) == 1
-    restarted = Runtime(None, [budget], lambda: 100, log_file=None, state_file=path)
+    restarted = Runtime([budget], lambda: 100, state_file=path)
     with pytest.raises(PolicyError):
         restarted.reserve(payload())
     restarted.finish(next(t for t in tickets if t), completion("Safe"))
@@ -206,7 +206,7 @@ import sys
 from stopslop.runtime import Runtime
 from stopslop.policy import PolicyError
 budget = dict(id='b',type='fixed_quota',tokens='output',limit=10,window_seconds=86400,reset_at='1970-01-01T00:00:00Z')
-runtime = Runtime(None,[budget],lambda:100,log_file=None,state_file=sys.argv[1])
+runtime = Runtime([budget],lambda:100,state_file=sys.argv[1])
 try:
     runtime.reserve({'model':'m','messages':[{'content':'hi'}],'max_tokens':10})
     print('accepted')
@@ -224,7 +224,7 @@ runtime.close()
 
 
 def test_orphan_release_refuses_live_owner(tmp_path):
-    runtime = Runtime(None, log_file=None, state_file=str(tmp_path / "state.sqlite3"))
+    runtime = Runtime(state_file=str(tmp_path / "state.sqlite3"))
     ticket = runtime.reserve(payload())
     with pytest.raises(ValueError, match="owner is alive"):
         runtime.release_orphan(ticket)
