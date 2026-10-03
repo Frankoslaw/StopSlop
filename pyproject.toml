@@ -1,17 +1,14 @@
 [project]
-name = "stopslop"
+name = "stopslop-workspace"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-authors = [
-    { name = "Franciszek Łopuszański", email = "franopusz2006@gmail.com" }
-]
 requires-python = ">=3.14"
 dependencies = []
 
-[project.scripts]
-stopslop = "stopslop:main"
+[tool.uv.workspace]
+members = ["packages/*"]
 
-[build-system]
-requires = ["uv_build>=0.12.22,<0.13.0"]
-build-backend = "uv_build"
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.28", "stopslop-demo"]
+
+[tool.uv.sources]
+stopslop-demo = { workspace = true }

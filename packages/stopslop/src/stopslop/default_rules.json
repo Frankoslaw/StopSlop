@@ -1,0 +1,6 @@
+[
+  {"id":"pesel","pattern":"(?<!\\d)(?:\\d[ -]?){10}\\d(?!\\d)","validator":"pesel"},
+  {"id":"bank_account","pattern":"(?<!\\w)(?:PL[ ]?)?(?:\\d[ ]?){25}\\d(?!\\d)","validator":"bank"},
+  {"id":"phone","pattern":"(?<!\\w)(?:\\+48[ .-]?)?(?:\\d[ .-]?){8}\\d(?!\\d)"},
+  {"id":"polish_name","pattern":"\\b(?:Jan|Anna|Piotr|Maria|Katarzyna|Tomasz|Franciszek)\\s+(?:Kowalsk[ai]|Nowak|Wiśniewsk[ai]|Łopuszańsk[ai])\\b"}
+]
