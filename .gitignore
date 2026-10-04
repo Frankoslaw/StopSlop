@@ -217,3 +217,9 @@ node_modules/
 # Keep documentation tooling despite the virtualenv Scripts exclusion above.
 !docs/site/scripts/
 !docs/site/scripts/check-links.mjs
+
+# Generated presentation exports and private authoring artifacts
+*.pdf
+/output/stopslop-presentation/
+/.presentation-build/
+/.chart-data-*/
