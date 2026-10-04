@@ -39,7 +39,7 @@ Set the four upstream values together when switching providers, especially when 
 | `rules_file` | `STOPSLOP_RULES_FILE` | Empty; custom detector catalog, mutually exclusive with policy file |
 | `dynamic_policy_file` | `STOPSLOP_DYNAMIC_POLICY_FILE` | Empty; restrictive additive overlay; requires base policy |
 | `deterministic` | `STOPSLOP_DETERMINISTIC` | `false`; skip semantic checks explicitly |
-| `classifier` | `STOPSLOP_CLASSIFIER` | `laya`; choices `laya`, `jev`, `llm` |
+| `classifier` | `STOPSLOP_CLASSIFIER` | `laya`; choices `laya`, `jev`, `llm`, `ollama` |
 | `fallback_classifier` | `STOPSLOP_FALLBACK_CLASSIFIER` | Empty; independent eligible budget assessment backend |
 | `laya_model` | `STOPSLOP_LAYA_MODEL` | `convaiinnovations/laya` |
 | `laya_device` | `STOPSLOP_LAYA_DEVICE` | `cpu` |
@@ -76,3 +76,25 @@ Budget routing is selected by `[budget_fallback]` in policy; these settings supp
 | `timeout` | `STOPSLOP_TIMEOUT` | `120.0` seconds; finite positive number |
 
 `timeout` configures HTTP timeout behavior, not a single total end-to-end deadline for classification, chat, and output checks. Listener `--host`, `--port`, and `--json-logs` are gateway-only CLI options, not `Settings` fields.
+
+## Automatic generation
+
+| Setting | Environment | Default |
+| --- | --- | --- |
+| `autogen` | `STOPSLOP_AUTOGEN` | `false` in code; `true` in shipped dotenv; `--autogen` / `--no-autogen` |
+| `autogen_output_file` | `STOPSLOP_AUTOGEN_OUTPUT_FILE` | `policy.dyn.toml` |
+
+The `ollama` classifier uses the local endpoint/model/key independently of the main provider. The shipped fallback classifier is `ollama` using `qwen3:0.6b`. See [administration](../../operations/administration/) for scheduling and activation.
+
+## Switch to hosted chat
+
+Keep Laya for local assessment and change all four upstream values in `.env`, for example:
+
+```dotenv
+STOPSLOP_PROVIDER=nvidia
+STOPSLOP_BASE_URL=https://integrate.api.nvidia.com/v1
+STOPSLOP_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+STOPSLOP_KEY=your-provider-key
+```
+
+Approve the model in `policy.toml`, then run `just demo`. Qwen remains available for local privacy routing, eligible budget fallback, and deferred rule generation. `just demo-local` always selects Ollama and Laya.

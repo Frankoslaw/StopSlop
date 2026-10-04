@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-Commands are available in an installed environment. In a source checkout, run `uv sync --all-packages` first and use `uv run --no-sync --package PACKAGE COMMAND`. The root `justfile` supplies convenience recipes; it does not install dependencies or chat models.
+Commands are available in an installed environment. In a source checkout, run `uv sync --all-packages` first and use `uv run --no-sync --package PACKAGE COMMAND`. The root `justfile` supplies convenience recipes. `just setup` installs all packages with Laya, starts Ollama when needed, pulls Qwen, and recreates `.env` from the example using the installed model name. `just demo-local` runs the local scripted demo and `just top` opens the dashboard.
 
 ## stopslop-proxy
 

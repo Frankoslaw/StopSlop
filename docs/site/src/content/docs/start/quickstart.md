@@ -5,40 +5,28 @@ description: Install the workspace, configure a provider, and send your first pr
 
 ## Prerequisites
 
-Use Python 3.14, [uv](https://docs.astral.sh/uv/), and a checkout of this repository. A hosted provider needs a credential; local Ollama needs an already installed model served on its OpenAI-compatible endpoint.
-
-Commands below run from the repository root. Installation uses source packages until a release is published.
+Install [uv](https://docs.astral.sh/uv/), [just](https://just.systems/man/en/chapter_4.html), and [Ollama](https://ollama.com/download). Run commands from the repository root.
 
 ## 1. Install and configure
 
 ```sh
-uv sync --all-packages
+just setup
 ```
 
-Copy `.env.example` to `.env`:
+Setup installs Python 3.14 if needed and all workspace packages with the Laya extra, starts local Ollama if necessary, and pulls `qwen3:0.6b`. It recreates `.env` from `.env.example` using the installed model reported by Ollama. Re-running setup replaces `.env`; policy and usage history remain intact.
 
-```powershell
-Copy-Item .env.example .env
-```
-
-On macOS or Linux, use `cp .env.example .env`.
-
-The example selects NVIDIA chat and Jev semantic classification. Set `STOPSLOP_KEY` to the NVIDIA credential and `STOPSLOP_JEV_KEY` to the Jev credential. The shipped policy already approves the example NVIDIA model.
-
-:::note[Defaults and the example file]
-`Settings` defaults to the local Laya classifier, but `.env.example` explicitly selects Jev. A copied example file therefore needs a Jev key. To select Laya, install the optional dependency with `uv sync --all-packages --extra laya` and set `STOPSLOP_CLASSIFIER=laya`.
-:::
+The local defaults use Qwen chat and Laya CPU assessment. No hosted provider or Jev key is required. The first demo downloads and loads Laya weights. Ollama stays running; `just ollama-serve` restarts it if needed.
 
 ## 2. Verify the demo
 
 ```sh
-uv run --no-sync --package stopslop-demo stopslop-demo --scenario nda
+just demo-local
 ```
 
-The scripted scenario checks expected allowed, filtered, and blocked behavior using invented examples. It can make real provider and classifier calls. Use a second terminal to inspect telemetry:
+The local scripted scenario checks expected allowed, filtered, and blocked behavior using invented examples. Its final block uses an explicit confidentiality marker; `--scenario nda` separately demonstrates semantic-only NDA blocking. Use a second terminal to inspect telemetry:
 
 ```sh
-uv run --no-sync --package stopslop-top stopslop-top
+just top
 ```
 
 For a single prompt:
@@ -70,7 +58,7 @@ with OpenAI(
     max_retries=0,
 ) as client:
     reply = client.chat.completions.create(
-        model="nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        model="qwen3:0.6b",
         messages=[{"role": "user", "content": "Explain how rain forms."}],
         max_tokens=96,
         stream=False,
@@ -80,21 +68,25 @@ with OpenAI(
 
 When `STOPSLOP_ACCESS_TOKENS` is configured, replace `local-client` with an assigned gateway token. The gateway supplies its own upstream credential. Automatic SDK retries are disabled so policy failures and quotas are handled explicitly by the application.
 
-## A fully local alternative
+## Other configurations
 
-Install the Laya extra and configure these `.env` values, replacing the model with the exact name installed in Ollama:
+`just demo` respects the provider in `.env`; `just demo-local` selects Ollama and Laya. Set all four main provider values together for hosted chat and approve its exact model in `policy.toml`. Jev is optional and needs its own key only when selected as the classifier.
 
-```dotenv
-STOPSLOP_PROVIDER=ollama
-STOPSLOP_BASE_URL=http://127.0.0.1:11434/v1
-STOPSLOP_MODEL=llama3.2
-STOPSLOP_KEY=ollama
-STOPSLOP_CLASSIFIER=laya
-STOPSLOP_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
-STOPSLOP_LOCAL_MODEL=llama3.2
-STOPSLOP_LOCAL_KEY=local
-```
-
-Add `llama3.2` to `allowed_models` in `policy.toml`. Review budgets: the shipped daily cap is scoped to the NVIDIA model and will not cap Ollama usage. Add an overall or Ollama-specific budget if desired. StopSlop does not start Ollama or install chat models. Laya loads on CPU by default.
+The shipped daily cap is scoped to NVIDIA and does not cap Qwen chat. Add an overall or Qwen-specific budget if needed. For Qwen as the only chat model, set a Qwen budget's exhaustion action to `block`; budget fallback needs a different model.
 
 Continue with [configuration](../../reference/configuration/) and [policy rules](../../policies/rules/).
+
+## Daily commands and cleanup
+
+```sh
+just demo-local                  # Local Qwen chat and Laya policy assessment
+just demo                        # Use the provider selected in .env
+just top                         # Dashboard in another terminal
+just proxy                       # HTTP gateway
+just test                        # Test suite
+uv run --no-sync --package stopslop-demo stopslop-demo  # Interactive chat
+```
+
+Demo, proxy, and dashboard use `STOPSLOP_STATE_FILE` from `.env`; keep it consistent. Stop all three before running `just clean` to reset recorded usage, incidents, and generated rules. Interactive chat does not retry provider calls; scripted scenarios retry only transient HTTP 502/503/504 failures.
+
+For hosted chat, see [configuration](../../reference/configuration/). For policy editing, see the [policy reference](../../reference/policy/). To work on the docs themselves, see [documentation development](../../contributing/documentation/).

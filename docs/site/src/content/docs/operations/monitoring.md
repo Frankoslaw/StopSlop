@@ -18,6 +18,7 @@ Use the enforcing service's state path. A different working directory with a rel
 | Overview | Sessions, active controls, quota usage, telemetry |
 | Violations | Timestamped persistent history, newest first |
 | Chats | Recorded requests and delivered replies; Enter opens details |
+| Graphs | Live request and token rates, mean call latency, failed-call percentage, pending calls, highest active quota usage |
 
 The persistent violation browser is not limited to the latest 1,000 records, even though a runtime session keeps a bounded recent list in its own telemetry.
 
@@ -25,7 +26,7 @@ The persistent violation browser is not limited to the latest 1,000 records, eve
 
 | Key | Action |
 | --- | --- |
-| Tab or 1 / 2 / 3 | Switch view |
+| Tab or 1 / 2 / 3 / 4 | Switch view |
 | Arrow keys | Navigate or scroll |
 | Page Up / Page Down | Move by page |
 | Home / End | Move to start or end |
@@ -42,6 +43,8 @@ uv run --no-sync --package stopslop-top stopslop-top --once --state-file /absolu
 ```
 
 The refresh interval defaults to 0.5 seconds and can be changed with `--interval`.
+
+Graphs keep the latest 120 samples while the monitor is open, including while browsing other tabs. Samples are at least one second apart; slower refresh intervals also slow sampling. Rates begin after the first sample and latency and failure percentage describe calls finished since the previous sample. Quota usage includes reservations. Charts stack vertically in narrow terminals and can be scrolled.
 
 ## Request-level observability
 

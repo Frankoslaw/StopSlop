@@ -83,3 +83,32 @@ Tool supports `call`; MCP supports `call`/`read`; memory supports `read`/`write`
 Unprefixed built-in detector types and internal `id`/`kind` fields remain readable for existing integrations. Do not provide both public and internal names on one entry: `name` plus `id`, or permission `type` plus `kind`, is invalid. Public generic rules use `type = "regex"` or `"semantic"` and optional `name`.
 
 External dynamic policies may add only new restrictive input/output rules. They cannot edit budgets, permissions, model approvals, or defaults. See [administration](../../operations/administration/).
+
+## Edit the shipped policy
+
+Open `policy.toml` in the repository root. Changes reload before the next request; provider and classifier changes in `.env` require restarting the process.
+
+| What to change | Where in `policy.toml` |
+| --- | --- |
+| Approve a different model | Add its exact Ollama/API name to `allowed_models`, then set `STOPSLOP_MODEL` in `.env` |
+| Hide emails, phone numbers, or other PII | Set the corresponding `builtin.*` rule's `action = "filter"` |
+| Reject a secret or prohibited phrase | Set `action = "block"` |
+| Keep matched content on the local model | Set `action = "local"` |
+| Allow a particular rule's matches | Set `action = "allow"`; other rules can still reject the request |
+| Change a semantic rule's sensitivity | Edit its `description` and `threshold` (0–100); lower thresholds match more often |
+| Limit usage | Edit `[[budgets]]`: `limit`, `window_seconds`, `models`, and `on_exhaustion` |
+| Inspect generated answers | Edit `[output]` and `[[output.rules]]`; input rules are inherited by default |
+
+For example, append a rule to block an internal project name:
+
+```toml
+[[rules]]
+type = "regex"
+name = "internal_project"
+pattern = '\bProject Raven\b'
+action = "block"
+```
+
+The shipped daily budget covers the NVIDIA model and falls back to Qwen; local Qwen chat is not limited by that model-scoped budget. To cap the local demo, set that budget's `models = ["qwen3:0.6b"]` and `on_exhaustion = "block"`. Remove `models` for a cap across all models, including assessment and generation. A fallback must use a different approved chat model.
+
+Deferred generation is enabled after setup. Set `STOPSLOP_AUTOGEN=false` or run `just demo-local --no-autogen` to disable it. Generated restrictive rules are stored in SQLite and exported to `policy.dyn.toml`; do not add that export as a second dynamic overlay. Invalid policy edits fail closed. `--deterministic` skips semantic checks and is available for testing deterministic rules alone.

@@ -41,6 +41,8 @@ class Settings:
     access_tokens: str = field(default="", repr=False)
     client_token: str = field(default="", repr=False)
     dynamic_policy_file: str = ""
+    autogen: bool = False
+    autogen_output_file: str = "policy.dyn.toml"
     timeout: float = 120.0
 
     def __post_init__(self):
@@ -61,16 +63,20 @@ class Settings:
         for name in ("max_request_bytes", "max_response_bytes"):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if self.fallback_classifier and self.fallback_classifier not in ("laya", "jev", "llm"):
-            raise ValueError("fallback_classifier must be laya, jev or llm")
-        if self.classifier not in ("laya", "jev", "llm"):
-            raise ValueError("classifier must be laya, jev or llm")
+        if self.fallback_classifier and self.fallback_classifier not in ("laya", "jev", "llm", "ollama"):
+            raise ValueError("fallback_classifier must be laya, jev, llm or ollama")
+        if self.classifier not in ("laya", "jev", "llm", "ollama"):
+            raise ValueError("classifier must be laya, jev, llm or ollama")
         if self.policy not in POLICIES:
             raise ValueError(f"policy must be one of {POLICIES}")
         if self.policy == "redirect" and not all((self.fallback_base_url, self.fallback_model, self.fallback_key)):
             raise ValueError("redirect requires fallback URL, model and key")
         if not math.isfinite(self.timeout) or self.timeout <= 0:
             raise ValueError("timeout must be positive")
+        if self.autogen and (not self.policy_file or not self.local_model):
+            raise ValueError("autogen requires policy_file and local_model")
+        if self.autogen and self.dynamic_policy_file and Path(self.dynamic_policy_file).resolve() == Path(self.autogen_output_file).resolve():
+            raise ValueError("autogen export is already loaded from SQLite; do not also load it as dynamic_policy_file")
         if self.access_tokens:
             tokens = json.loads(self.access_tokens)
             if (not isinstance(tokens, dict) or not tokens
@@ -94,7 +100,7 @@ class Settings:
                 continue
             value = environment.get("STOPSLOP_" + name.upper())
             if value is not None:
-                if name in ("deterministic", "preserve_model", "log_chats"):
+                if name in ("deterministic", "preserve_model", "log_chats", "autogen"):
                     if value.lower() not in ("true", "false", "1", "0"):
                         raise ValueError(f"STOPSLOP_{name.upper()} must be true or false")
                     values[name] = value.lower() in ("true", "1")
@@ -111,7 +117,7 @@ def add_settings_arguments(parser):
     """One flag per runtime setting; None lets environment/default values apply."""
     parser.add_argument("--env-file", default=".env")
     choices = {"provider": ("nvidia", "openai", "ollama"), "policy": POLICIES,
-               "classifier": ("laya", "jev", "llm"), "fallback_classifier": ("laya", "jev", "llm")}
+               "classifier": ("laya", "jev", "llm", "ollama"), "fallback_classifier": ("laya", "jev", "llm", "ollama")}
     groups = {
         "upstream": parser.add_argument_group("Upstream provider"),
         "enforcement": parser.add_argument_group("Policy and assessment"),
@@ -140,7 +146,7 @@ def add_settings_arguments(parser):
         flag = "--" + name.replace("_", "-")
         description = help_text.get(name, "Configure " + name.replace("_", " "))
         description += " (STOPSLOP_" + name.upper() + ")"
-        if name in ("deterministic", "preserve_model", "log_chats"):
+        if name in ("deterministic", "preserve_model", "log_chats", "autogen"):
             target.add_argument(flag, action=argparse.BooleanOptionalAction, default=None, help=description)
         else:
             value_type = float if name == "timeout" else int if name in ("max_request_bytes", "max_response_bytes") else str

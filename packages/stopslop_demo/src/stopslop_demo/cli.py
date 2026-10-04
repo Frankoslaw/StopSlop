@@ -54,6 +54,8 @@ def main():
     add_settings_arguments(parser)
     parser.add_argument("--max-tokens", type=int, default=96, help="Maximum reply tokens (default: 96)")
     parser.add_argument("--retries", type=int, default=2, help="Scenario retries for chat HTTP 502/503/504 only (default: 2)")
+    parser.add_argument("--best-effort", action=argparse.BooleanOptionalAction, default=False,
+                        help="Skip failed scripted demo turns quietly without verifying expected actions")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     args = parser.parse_args()
     if args.max_tokens <= 0:
@@ -93,10 +95,12 @@ def main():
                 if scenario is not None:
                     turn = next(scenario, None)
                     if turn is None:
-                        logger.info("Scenario complete: all expected actions verified")
+                        logger.info("Demo complete (best-effort; outcomes were not verified)" if args.best_effort
+                                    else "Scenario complete: all expected actions verified")
                         return
                     turn_number += 1
-                    print(f"\nYou [{turn_number}, expected={turn.expected_action}]: {turn.prompt}", flush=True)
+                    label = str(turn_number) if args.best_effort else f"{turn_number}, expected={turn.expected_action}"
+                    print(f"\nYou [{label}]: {turn.prompt}", flush=True)
                     prompt = turn.prompt
                 else:
                     prompt = args.prompt if args.prompt is not None else input("You: ")
@@ -110,28 +114,36 @@ def main():
                 continue
             candidate = messages + [{"role": "user", "content": prompt}]
             try:
-                answer = chat(client, settings.model, candidate, expected_action=turn.expected_action,
-                              max_tokens=args.max_tokens, retries=args.retries, prepare=router.policy.prepare_models) if turn else chat(client, settings.model, candidate, max_tokens=args.max_tokens, prepare=router.policy.prepare_models)
+                answer = chat(client, settings.model, candidate,
+                              expected_action=None if args.best_effort else turn.expected_action,
+                              max_tokens=args.max_tokens, retries=0 if args.best_effort else args.retries,
+                              prepare=router.policy.prepare_models) if turn else chat(client, settings.model, candidate, max_tokens=args.max_tokens, prepare=router.policy.prepare_models)
                 messages = candidate + [{"role": "assistant", "content": answer or ""}]
             except KeyboardInterrupt:
                 logger.warning("Cancelled while waiting for the backend; no retry was made.")
                 raise SystemExit(130) from None
             except APIStatusError as error:
+                if turn is not None and args.best_effort:
+                    continue
                 code = error.body.get("code", "upstream_error") if isinstance(error.body, dict) else "upstream_error"
                 if code != "policy_blocked":
                     logger.error("Rejected: HTTP %s (%s)", error.status_code, code)
                 if turn is not None:
                     if code == "policy_blocked" and turn.expected_action == "block":
-                        logger.info("Scenario NDA restriction verified: blocked before chat generation")
+                        logger.info("Scenario restriction verified: blocked before chat generation")
                         continue
                     logger.error("Scenario failed: expected=%s", turn.expected_action)
                     raise SystemExit(1)
                 if args.prompt is not None or error.status_code == 429:
                     raise SystemExit(1)
             except APITimeoutError:
+                if turn is not None and args.best_effort:
+                    continue
                 logger.error("Backend timed out after %.0fs; no retry was made. Increase --timeout or try another --model.", settings.timeout)
                 raise SystemExit(1)
             except APIConnectionError as error:
+                if turn is not None and args.best_effort:
+                    continue
                 logger.error("Cannot connect to chat backend (%s); no retry was made.", type(error.__cause__).__name__)
                 raise SystemExit(1)
             if args.prompt is not None:

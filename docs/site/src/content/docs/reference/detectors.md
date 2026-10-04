@@ -44,3 +44,7 @@ allowed_patterns = ['\bsupport@example\.com\b']
 ```
 
 This exempts the known support address for the email detector, without exempting a secret or another rule's match in the same message. See [rules and input actions](../../policies/rules/).
+
+## Deterministic scan performance
+
+Regex patterns remain compiled for the loaded policy. Exception patterns are scanned once per rule per text, reusing their spans for every hit. Explicit output rules scan only their selected deterministic detectors; inherited input checks remain separate. Rules without identifier validators skip identifier normalization. Timeout handling and redaction behavior remain unchanged.

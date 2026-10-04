@@ -49,3 +49,11 @@ Externally managed policy feeds remain supported as configuration files. Text si
 ## Validation
 
 The automated suite uses mocked providers and classifiers. It checks positive/negative enforcement cases, admission across processes, reload races, persisted consumption, failure accounting, request limits, regex timeouts, content logging controls, permission callbacks and TUI pagination. Passing tests does not establish real classifier precision/recall or production exploit coverage. Performance and real-model accuracy still need measurement on the intended deployment; future scalability is outside this change.
+
+## Deferred local adaptation
+
+With `STOPSLOP_AUTOGEN=true` (enabled in the example dotenv), recorded input and output violations schedule local Qwen generation in a daemon worker. Use `--autogen` / `--no-autogen` or set the environment value to `false` to control it. This responds to detected violations, including unsafe output that passed input checks; it cannot discover an entirely undetected bypass. The worker sends incident metadata and policy definitions, never raw chats. It validates restrictive additions, saves them in SQLite, and atomically exports `policy.dyn.toml` (`STOPSLOP_AUTOGEN_OUTPUT_FILE`). Subsequent requests reload validated additions. Generation failures preserve enforcement and do not delay responses.
+
+Scheduling allows one job per state file per process, coalescing bursts with a 60-second cooldown after completion. Incidents during a job or cooldown remain stored for the next eligible incident or explicit generation command; shutdown does not wait for the daemon. Multiple gateway processes have independent scheduling. Set `STOPSLOP_AUTOGEN=false` when only explicit generation is desired. Do not also load the generated export through `STOPSLOP_DYNAMIC_POLICY_FILE`, because those rules already load from SQLite.
+
+Generation uses `STOPSLOP_LOCAL_*` when a local model is configured; otherwise the explicit command uses the main provider. The shipped local model is `qwen3:0.6b`. Model approvals and quota reservation still apply. Start Ollama with `just ollama-serve`; an existing Ollama service already serves installed models.

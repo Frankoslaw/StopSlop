@@ -25,11 +25,13 @@ def chat_preview(record):
 
 
 class Viewer:
-    tabs = ("Overview", "Violations", "Chats")
+    tabs = ("Overview", "Violations", "Chats", "Graphs")
 
     def __init__(self):
         self.tab = 0
-        self.position = [0, 0, 0]
+        self.position = [0] * len(self.tabs)
+        from .graphs import Graphs
+        self.graphs = Graphs()
         self.detail = None
         self.detail_scroll = 0
         self.total = 0
@@ -40,12 +42,13 @@ class Viewer:
     def key(self, key):
         if key in ("q", "Q"):
             return False
-        if key in ("tab", "backtab", "left", "right", "1", "2", "3"):
-            self.tab = int(key) - 1 if key in ("1", "2", "3") else (self.tab + (-1 if key in ("left", "backtab") else 1)) % 3
+        if key in ("tab", "backtab", "left", "right", "1", "2", "3", "4"):
+            self.tab = int(key) - 1 if key in ("1", "2", "3", "4") else (self.tab + (-1 if key in ("left", "backtab") else 1)) % len(self.tabs)
             self.detail = None
+            self.visible = []
         elif key == "escape":
             self.detail = None
-        elif key == "enter" and self.tab and self.visible and self.detail is None:
+        elif key == "enter" and self.tab in (1, 2) and self.visible and self.detail is None:
             record = next((r for index, r in self.visible if index == self.position[self.tab]), None)
             if record:
                 self.detail = record
@@ -64,6 +67,9 @@ class Viewer:
     def render(self, repository, console):
         self.page_size = max(3, console.height - 8)
         width = max(20, console.width - 6)
+        sessions = repository.sessions() if repository else []
+        state = repository.load_state() if repository else {}
+        self.graphs.sample(sessions, state)
         if self.detail:
             lines = self.detail_text(self.detail).wrap(console, width)
             self.detail_lines = len(lines)
@@ -72,9 +78,7 @@ class Viewer:
             title = f"{self.tabs[self.tab]} #{self.detail['id']} · {timestamp(self.detail['time'])}"
         elif self.tab == 0:
             from .top import dashboard
-            sessions = repository.sessions() if repository else []
             if repository:
-                state = repository.load_state()
                 for session in sessions:
                     session.update(usage_events=state["events"], reservations=list(state["pending"].values()),
                                    blocked_clients=len(state.get("blocked_clients", [])))
@@ -83,6 +87,14 @@ class Viewer:
             start = min(self.position[0], max(0, self.total - self.page_size))
             content = Group(*(Text.assemble(*((segment.text, segment.style) for segment in line if not segment.control)) for line in rendered[start:start + self.page_size]))
             title = f"Overview · lines {start + 1}–{min(self.total, start + self.page_size)} / {self.total}"
+        elif self.tab == 3:
+            rendered = console.render_lines(self.graphs.render(width, self.page_size),
+                                            console.options.update(width=width), pad=False)
+            self.total = len(rendered)
+            start = min(self.position[3], max(0, self.total - self.page_size))
+            content = Group(*(Text.assemble(*((segment.text, segment.style) for segment in line if not segment.control))
+                              for line in rendered[start:start + self.page_size]))
+            title = "Graphs · live runtime activity"
         else:
             kind = "violation" if self.tab == 1 else "chat"
             self.total = repository.count(kind) if repository else 0
@@ -102,9 +114,9 @@ class Viewer:
                                                        else "No chats recorded. Start the gateway or demo; check that recording is enabled.")
             title = f"{self.tabs[self.tab]} · {self.total} records · newest first"
         tabs = Text("   ".join(("[" + name + "]") if index == self.tab else name for index, name in enumerate(self.tabs)), style="bold cyan")
-        body = Group(Text(title, style="dim"), content) if self.tab == 0 else Panel(content, title=Text(title), height=self.page_size + 2)
+        body = Group(Text(title, style="dim"), content) if self.tab in (0, 3) else Panel(content, title=Text(title), height=self.page_size + 2)
         return Group(tabs, body,
-                     Text("Tab / 1–3: switch · ↑↓ / PgUp/PgDn / Home/End: scroll · Enter: read · Esc: back · Q: quit"))
+                     Text("Tab / 1–4: switch · ↑↓ / PgUp/PgDn / Home/End: scroll · Enter: read · Esc: back · Q: quit"))
 
     @staticmethod
     def detail_text(record):

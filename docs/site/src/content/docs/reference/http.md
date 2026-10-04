@@ -43,6 +43,12 @@ See [supported usage](../../start/compatibility/) for the exact field allowlist.
 
 These headers describe successful checked responses; error paths are not required to include them.
 
+## POST /api/chat
+
+Native Ollama text clients can send `model`, `messages`, explicit `stream: false`, and optional `options` containing `temperature`, `top_p`, or a positive `num_predict` (mapped to `max_tokens`). Other fields and options are rejected. Ollama defaults to streaming, so omitting `stream: false` is rejected. Message rules, authentication, model selection, policy enforcement, and response headers match Chat Completions.
+
+The gateway translates requests to its configured `/v1` upstream and returns a checked Ollama-shaped response with `model`, `created_at`, `message`, `done`, `done_reason`, `prompt_eval_count`, and `eval_count`. Provider timing fields are unavailable. Configure the upstream with its OpenAI-compatible base URL. See [Ollama's chat contract](https://docs.ollama.com/api/chat).
+
 ## POST /v1/authorize
 
 Requires a configured authenticated identity even when chat is allowed without authentication on loopback. The body contains exactly `kind`, `resource`, and `operation`:

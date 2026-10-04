@@ -55,7 +55,7 @@ class Detector:
                 on_rule(rule_id)
             hits.extend(Match(rule_id, match.start(), match.end())
                         for match in pattern.finditer(text, timeout=0.05)
-                        if valid_identifier(match.group(), validator))
+                        if validator is None or valid_identifier(match.group(), validator))
         return hits
 
     def redact(self, text: str, matches: list[Match]) -> str:

@@ -67,6 +67,31 @@ def test_local_load_failure_is_closed(tmp_path, monkeypatch):
         Policy(configuration(tmp_path)).route({"messages": [{"role": "user", "content": "NDA details"}]})
 
 
+def test_shipped_nda_blocks_moderate_risk_but_allows_agenda(tmp_path, monkeypatch):
+    from pathlib import Path
+    from stopslop_demo.scenarios import SCENARIOS
+
+    def predict(state, questions):
+        answers = {}
+        for name, question in questions.items():
+            text = question["instructions"]["target_message"]["content"]
+            risk = .72 if "Project Kestrel" in text and name.endswith("confidential_semantic") else .2
+            answers[name] = {"type": "noul", "noul": risk}
+        return {"answers": answers}
+
+    monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(load=lambda *args, **kwargs: SimpleNamespace(predict=predict)))
+    settings = Settings(key="mock", classifier="laya", state_file=str(tmp_path / "state.db"),
+                        policy_file=str(Path(__file__).resolve().parents[1] / "policy.toml"))
+    policy = Policy(settings)
+    try:
+        assert policy.route({"messages": [{"role": "user", "content": SCENARIOS["nda"][0].prompt}]}).action == "allow"
+        with pytest.raises(PolicyError, match="policy_blocked") as caught:
+            policy.route({"messages": [{"role": "user", "content": SCENARIOS["nda"][-1].prompt}]})
+        assert "confidential_semantic" in caught.value.rules
+    finally:
+        policy.runtime.close()
+
+
 def test_prepare_loads_once_before_assessment(tmp_path, monkeypatch):
     calls = []
     def load(model, device):

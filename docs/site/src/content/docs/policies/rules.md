@@ -74,8 +74,8 @@ Use unique lowercase identifiers matching `[a-z][a-z0-9_]*`. A `name` is optiona
 [[rules]]
 type = "semantic"
 name = "confidential_information"
-description = "Do not disclose non-public financial results or NDA-protected project details. Public information and fictional examples are allowed."
-threshold = 75
+description = "Do not disclose NDA-protected technical designs or private launch plans to unauthorized recipients. Generic agendas, email signatures, public information, and general NDA explanations are allowed."
+threshold = 70
 action = "block"
 ```
 
@@ -94,3 +94,9 @@ Output filtering handles newly generated sensitive text separately; it does not 
 The policy loader checks for updates before each request. A validated change applies to the next request; an in-flight request keeps its input policy, output policy, and budget snapshot. Invalid or missing configured policy files fail closed rather than continuing with a stale policy. Provider and classifier settings remain fixed for the running process.
 
 Write policy changes atomically where possible so another process does not observe a partially written file. Keep policies under version control and evaluate changes with both allowed and prohibited examples. See [policy reference](../../reference/policy/) and [administration](../../operations/administration/) for dynamic additions.
+
+## Shipped NDA demo rule
+
+The shipped `confidential_semantic` rule uses a threshold of 70, reduced from 75 for local Laya assessment. The allowed turns explicitly describe a public meeting and its invitation signature. The prohibited turn states the intent to breach an NDA and leak the protected sensor design and launch date to an unauthorized supplier. This separates public planning from the actual disclosure request while preserving the rule’s scope for non-public company information.
+
+The `nda` scenario demonstrates a semantic block: its final request does not match a deterministic blocking pattern. The `local` scenario retains an explicit confidentiality marker for deterministic comparison. Thresholds are decision cutoffs on classifier scores; use benign and prohibited examples to tune your deployment rather than treating the shipped value as universal calibration.

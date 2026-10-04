@@ -28,5 +28,7 @@ def check_semantic_setup(settings):
                              "select --classifier llm/jev, or explicitly use --deterministic")
         if classifier == "jev" and not settings.jev_key:
             raise ValueError("Semantic policies require STOPSLOP_JEV_KEY")
+        if classifier == "ollama" and not settings.local_model:
+            raise ValueError("Ollama assessment requires STOPSLOP_LOCAL_MODEL")
         if classifier == "llm" and not settings.key:
             raise ValueError("LLM assessment requires STOPSLOP_KEY")

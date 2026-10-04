@@ -1,4 +1,4 @@
-"""Explicit, bounded incident-to-policy generation using the demo's chat model."""
+"""Bounded incident-to-policy generation using local Ollama or the main chat model."""
 import argparse
 import json
 import os
@@ -7,6 +7,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from dataclasses import replace
 
 import httpx
 
@@ -17,6 +18,28 @@ from .repository import SQLiteRepository
 
 KINDS = {"code_execution", "data_leak", "prompt_injection", "unsafe_deserialization",
          "supply_chain", "input_violation", "output_violation"}
+
+
+def generation_schema():
+    def rules(actions):
+        common = {"id": {"type": "string", "pattern": "^dyn_[a-z][a-z0-9_]{0,100}$"},
+                  "action": {"type": "string", "enum": actions}}
+        return {"type": "array", "maxItems": 4, "items": {"anyOf": [
+            {"type": "object", "additionalProperties": False,
+             "properties": {**common, "literal": {"type": "string", "minLength": 8, "maxLength": 256}},
+             "required": ["id", "action", "literal"]},
+            {"type": "object", "additionalProperties": False,
+             "properties": {**common, "description": {"type": "string", "minLength": 16, "maxLength": 2000},
+                            "threshold": {"type": "integer", "enum": [80]}},
+             "required": ["id", "action", "description", "threshold"]},
+        ]}}
+    return {"type": "object", "additionalProperties": False,
+            "properties": {"version": {"type": "integer", "enum": [1]},
+                           "rules": rules(["block"]),
+                           "output": {"type": "object", "additionalProperties": False,
+                                      "properties": {"rules": rules(["block", "block_device"])},
+                                      "required": ["rules"]}},
+            "required": ["version", "rules", "output"]}
 
 
 def validate_incident(value):
@@ -77,6 +100,9 @@ def generated_rules(data):
 
 def generate_policy(settings, base_path, output_path=None, transport=None):
     """Generate into SQLite; optionally export an editable configuration artifact."""
+    if settings.local_model:
+        settings = replace(settings, provider="ollama", base_url=settings.local_base_url,
+                           model=settings.local_model, key=settings.local_key, autogen=False)
     base = read_policy(base_path)
     from .policy_file import PolicyFile
     from .runtime import Runtime
@@ -90,7 +116,7 @@ def generate_policy(settings, base_path, output_path=None, transport=None):
     try:
         incidents = [validate_incident(record) for record in repository.records("incident", 100)]
         if not incidents or not settings.key:
-            raise ValueError("Generation requires incidents and a main model key")
+            raise ValueError("Generation requires incidents and a model key")
         previous = repository.dynamic_policy()
         merge_policy(base, previous)
         payload = {"model": settings.model, "temperature": 0, "max_tokens": 2048, "stream": False,
@@ -107,6 +133,13 @@ def generate_policy(settings, base_path, output_path=None, transport=None):
                        {"role": "user", "content": json.dumps({"incidents": incidents, "base_policy": base,
                                                                  "existing_dynamic_policy": previous})},
                    ]}
+        if settings.provider == "ollama":
+            payload["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "restrictive_policy", "strict": True, "schema": generation_schema()}}
+            payload["reasoning_effort"] = "none"
+            payload["messages"][0]["content"] += (
+                ' Example shape: {"version":1,"rules":[{"id":"dyn_example_attack",'
+                '"action":"block","literal":"example_attack()"}],"output":{"rules":[]}}. /no_think')
         if settings.model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning":
             payload["reasoning_budget"] = 0
         ticket = runtime.reserve(payload)
@@ -156,7 +189,7 @@ def main():
     record.add_argument("--state-file")
     record.add_argument("--kind", choices=sorted(KINDS), required=True)
     record.add_argument("--rule", action="append", default=[])
-    generate = commands.add_parser("generate", help="Explicitly send incident metadata and policies to the demo model")
+    generate = commands.add_parser("generate", help="Send incident metadata and policies to the local or main model")
     generate.add_argument("--env-file", default=".env")
     generate.add_argument("--policy-file", default="policy.toml")
     generate.add_argument("--output", help="Optional TOML export; rules are stored and activated in SQLite")

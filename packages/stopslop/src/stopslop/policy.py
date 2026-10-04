@@ -89,6 +89,8 @@ class Policy:
             self.evaluator = evaluator
         elif classifier == "laya":
             self.evaluator = LayaEvaluator(settings)
+        elif classifier == "ollama":
+            self.evaluator = self.local_evaluator()
         elif classifier == "llm":
             self.evaluator = LLMEvaluator(settings)
         else:
@@ -130,9 +132,18 @@ class Policy:
                 return client_id
         raise PolicyError("unauthorized_client", 401)
 
+    def local_evaluator(self):
+        if not self.settings.local_model:
+            raise ValueError("ollama classifier requires local_model")
+        return LLMEvaluator(replace(self.settings, provider="ollama", base_url=self.settings.local_base_url,
+                                    model=self.settings.local_model, key=self.settings.local_key), self.jev_transport)
+
     def record_incident(self, kind, rules, **details):
         self.runtime.repository.append("incident", self.runtime.clock(), self.runtime.session_id,
                                        dict(kind=kind, rules=list(rules), **details))
+        if self.settings.autogen:
+            from .autogen import schedule_generation
+            schedule_generation(self.settings)
 
     def authorize_operation(self, client_id, kind, resource, operation):
         from .permissions import authorize_operation
@@ -193,6 +204,7 @@ class Policy:
         with self.evaluator_lock:
             if classifier not in self.evaluator_cache:
                 self.evaluator_cache[classifier] = (LayaEvaluator(self.settings) if classifier == "laya"
+                                                    else self.local_evaluator() if classifier == "ollama"
                                                     else LLMEvaluator(self.settings) if classifier == "llm"
                                                     else JevEvaluator(self.settings, self.jev_transport))
             if classifier == "jev" and not self.settings.jev_key:
@@ -224,6 +236,9 @@ class Policy:
         payload = deepcopy(route.payload)
         payload["model"] = model
         payload.pop("reasoning_budget", None)
+        payload.pop("reasoning_effort", None)
+        if target == "local" and model.startswith("qwen3:"):
+            payload["reasoning_effort"] = "none"
         evaluator = route.evaluator
         if self.settings.fallback_classifier:
             evaluator = self.evaluator_for(self.settings.fallback_classifier)
@@ -309,6 +324,7 @@ class Policy:
             with self.evaluator_lock:
                 if classifier not in self.evaluator_cache:
                     self.evaluator_cache[classifier] = (LayaEvaluator(self.settings) if classifier == "laya"
+                                                        else self.local_evaluator() if classifier == "ollama"
                                                         else LLMEvaluator(self.settings) if classifier == "llm"
                                                         else JevEvaluator(self.settings, self.jev_transport))
                 evaluator = self.evaluator_cache[classifier]
@@ -432,6 +448,9 @@ class Policy:
             outbound.pop("reasoning_budget", None)
         if not key:
             raise PolicyError("missing_upstream_key", 503)
+        if (action == "local" or (not fallback and settings.provider == "ollama")) and outbound["model"].startswith("qwen3:"):
+            # Small demo token limits must leave room for the answer, not thinking.
+            outbound["reasoning_effort"] = "none"
         if definition and definition.allowed_models and outbound["model"] not in definition.allowed_models:
             raise PolicyError("model_not_allowed", 403)
         backend = "local" if action == "local" else "fallback" if fallback else "main"

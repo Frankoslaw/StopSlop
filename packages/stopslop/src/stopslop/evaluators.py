@@ -73,6 +73,10 @@ class LLMEvaluator:
                                                           "result_keys": expected})},
             ],
         }
+        if self.settings.provider == "ollama":
+            payload["response_format"] = {"type": "json_object"}
+            payload["reasoning_effort"] = "none"
+            payload["messages"][0]["content"] += " /no_think"
         if self.model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning":
             payload["reasoning_budget"] = 0
         try:

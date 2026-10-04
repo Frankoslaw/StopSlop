@@ -23,6 +23,37 @@ def completion():
                          "message": {"role": "assistant", "content": "Agenda updated."}}]}
 
 
+def test_best_effort_skips_failures_and_does_not_claim_verification(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from stopslop_demo import cli
+    calls = []
+
+    def upstream(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(403, json={"error": {"code": "policy_blocked"}})
+        if len(calls) == 2:
+            return httpx.Response(503, json={"error": {"code": "upstream_error"}})
+        if len(calls) == 3:
+            raise httpx.ReadTimeout("mock timeout", request=request)
+        return httpx.Response(200, headers={"X-StopSlop-Action": "allow"}, json=completion())
+
+    transport = httpx.MockTransport(upstream)
+    transport.policy = SimpleNamespace(injected_evaluator=object(), prepare_models=lambda: None)
+    monkeypatch.setattr(cli.Settings, "load", lambda *a, **k: replace(config(), deterministic=True))
+    monkeypatch.setattr(cli, "PolicyRouter", lambda s: transport)
+    monkeypatch.setattr("sys.argv", ["stopslop-demo", "--scenario", "nda", "--best-effort", "--color", "never"])
+    cli.main()
+    assert len(calls) == 4
+    output = capsys.readouterr()
+    assert "Agenda updated." in output.out
+    assert "outcomes were not verified" in output.err
+    assert "Scenario failed" not in output.err
+    assert "Rejected" not in output.err
+    assert "all expected actions verified" not in output.err
+    assert "retry" not in output.err
+
+
 def test_scenario_runs_sequentially_and_every_run_calls_backends(tmp_path, monkeypatch, capsys):
     from stopslop_demo import cli
     calls, assessments = [], []

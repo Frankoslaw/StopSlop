@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 from rich.console import Console
 
@@ -68,3 +69,58 @@ def test_overview_preserves_styles_without_an_outer_card():
     assert view.total > view.page_size
     view.key("end")
     console.print(view.render(None, console))
+
+
+def test_graph_history_rates_resets_and_bound():
+    from stopslop_top.graphs import Graphs
+    graphs = Graphs()
+    session = dict(pid=os.getpid(), requests=10, input_tokens=100, completed=5,
+                   failures=1, total_latency_seconds=12, in_flight=2)
+    graphs.sample([session], {}, now=0)
+    assert graphs.samples[-1] == (0, 0, 0, 0, 2, 0)
+    session.update(requests=14, input_tokens=140, completed=8, failures=2,
+                   total_latency_seconds=20)
+    graphs.sample([session], {}, now=2)
+    assert graphs.samples[-1] == (2, 20, 2, 25, 2, 0)
+    graphs.sample([session], {}, now=2.5)
+    assert len(graphs.samples) == 2
+    graphs.sample([], {}, now=3)
+    assert graphs.samples[-1] == (0, 0, 0, 0, 0, 0)
+    for now in range(4, 140):
+        graphs.sample([], {}, now=now)
+    assert len(graphs.samples) == 120
+
+
+def test_graph_tab_navigation_and_small_terminal():
+    from stopslop_top.viewer import Viewer
+    view = Viewer()
+    view.key("4")
+    assert view.tabs[view.tab] == "Graphs"
+    for width, height in ((100, 40), (40, 20)):
+        console = Console(width=width, height=height, record=True)
+        console.print(view.render(None, console))
+        assert "Requests" in console.export_text()
+        view.key("end")
+        console.print(view.render(None, console))
+        assert "Highest quota usage" in console.export_text()
+        view.key("home")
+    view.key("enter")
+    assert view.detail is None
+    view.key("tab")
+    assert view.tab == 0
+    view.key("backtab")
+    assert view.tab == 3
+
+
+def test_graph_quota_includes_reservations_and_excludes_closed_sessions():
+    from stopslop_top.graphs import Graphs
+    graphs = Graphs()
+    session = dict(pid=os.getpid(), session_id="active", budgets=[
+        dict(type="rolling_average", limit=10, window_seconds=10)])
+    state = dict(events=[[time.time(), "model", 20, 30]],
+                 pending={"ticket": [0, "model", 10, 20]})
+    graphs.sample([session], state, now=0)
+    assert graphs.samples[-1][-1] == 80
+    session["closed"] = True
+    graphs.sample([session], state, now=1)
+    assert graphs.samples[-1][-1] == 0

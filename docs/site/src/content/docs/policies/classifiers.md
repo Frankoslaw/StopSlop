@@ -36,7 +36,7 @@ STOPSLOP_JEV_MODEL=jev-latest
 STOPSLOP_JEV_KEY=replace-with-classifier-key
 ```
 
-The shipped `.env.example` selects Jev. Its key is separate from the chat provider key. Semantic assessment sends content for classification; review that trust boundary alongside chat routing.
+The shipped `.env.example` selects local Laya. If you select Jev, its key is separate from the chat provider key. Semantic assessment sends content for classification; review that trust boundary alongside chat routing.
 
 ## Upstream LLM
 
@@ -59,3 +59,7 @@ Deterministic mode explicitly disables semantic checks while retaining determini
 ## Evaluate rule quality
 
 Build fixtures with clear violations, safe public discussion, fictional examples, quoted material, and obfuscated forms relevant to your application. Review both false positives and missed violations before changing thresholds. Threshold percentages are classifier risk scores; they are not a guarantee of calibrated probability across backends.
+
+## Ollama assessment
+
+Select `--classifier ollama` or `--fallback-classifier ollama` to use `STOPSLOP_LOCAL_BASE_URL`, `STOPSLOP_LOCAL_MODEL`, and `STOPSLOP_LOCAL_KEY` independently of hosted chat settings. This is an LLM assessment with self-reported scores, not calibrated probabilities. The shipped fallback uses `qwen3:0.6b`; invalid responses fail closed.

@@ -12,7 +12,7 @@ Start with the returned `error.code`, the HTTP status, and the state path used b
 | Symptom | Check |
 | --- | --- |
 | Laya is not installed | Install `--extra laya`, choose another configured classifier, or explicitly choose deterministic mode |
-| Jev key required | `.env.example` selects Jev; configure `STOPSLOP_JEV_KEY` |
+| Jev key required | Jev was selected explicitly; configure `STOPSLOP_JEV_KEY` or select `laya` |
 | Ollama requires a model | Supply the exact installed model name |
 | Local URL rejected | Use loopback HTTP(S), without URL credentials, query, or fragment |
 | Policy invalid | Check the schema, duplicate names, output actions, and required budget fields |

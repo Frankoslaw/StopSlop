@@ -112,13 +112,22 @@ class PolicyFile:
                 entry = {**inherited[entry["id"]], "action": "block"}
             expanded.append(entry)
         self.output_definition = PolicyFile(data={"version": 1, "rules": expanded}) if output_entries else None
+        if self.output_definition:
+            self.output_definition.detector.rules = [rule for rule in self.output_definition.detector.rules
+                                                     if rule[0] in self.output_actions]
 
     def scan(self, text, on_rule=None):
-        # An exception applies only to a fully contained match of its own rule.
-        return [hit for hit in self.detector.scan(text, on_rule)
-                if not any(m.start() <= hit.start and hit.end <= m.end()
-                           for pattern in self.exceptions.get(hit.rule_id, [])
-                           for m in pattern.finditer(text, timeout=0.05))]
+        # Scan each exception once per text, even when its rule has many hits.
+        spans = {}
+        result = []
+        for hit in self.detector.scan(text, on_rule):
+            if hit.rule_id not in spans:
+                spans[hit.rule_id] = [(m.start(), m.end())
+                                      for pattern in self.exceptions.get(hit.rule_id, [])
+                                      for m in pattern.finditer(text, timeout=0.05)]
+            if not any(start <= hit.start and hit.end <= end for start, end in spans[hit.rule_id]):
+                result.append(hit)
+        return result
 
     def action_for(self, rule_id):
         return self.actions.get(rule_id, self.default_action)

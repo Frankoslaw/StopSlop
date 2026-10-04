@@ -1,6 +1,7 @@
 """Optional HTTP server sharing policy with the in-process router."""
 import asyncio
 import json
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 import httpx
 from starlette.concurrency import run_in_threadpool
@@ -9,6 +10,22 @@ from fastapi.responses import JSONResponse
 from stopslop.config import Settings
 from stopslop.policy import Policy, PolicyError
 from stopslop.http_limits import request_payload
+
+
+def ollama_payload(body):
+    """Translate the supported native text-chat subset, rejecting unknown fields."""
+    if (not isinstance(body, dict) or set(body) - {"model", "messages", "stream", "options"}
+            or body.get("stream", True) is not False):
+        raise PolicyError("unsupported_payload", 400)
+    if not isinstance(body.get("model"), str) or not body["model"]:
+        raise PolicyError("invalid_model", 400)
+    options = body.get("options", {})
+    if not isinstance(options, dict) or set(options) - {"temperature", "top_p", "num_predict"}:
+        raise PolicyError("unsupported_payload", 400)
+    payload = {"model": body["model"], "messages": body.get("messages"), "stream": False}
+    for name, value in options.items():
+        payload["max_tokens" if name == "num_predict" else name] = value
+    return payload
 
 def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = None, jev_transport=None, evaluator=None, repository=None) -> FastAPI:
     policy = Policy(settings, jev_transport, evaluator, repository)
@@ -28,12 +45,16 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
     async def health():
         return {"status": "ok", "policy": settings.policy}
 
+    @app.post("/api/chat")
     @app.post("/v1/chat/completions")
     async def completions(request: Request):
+        native = request.url.path == "/api/chat"
         routed = False
         try:
             client_id = await run_in_threadpool(policy.authenticate, request.headers.get("authorization", ""))
             payload = await request_payload(request, settings.max_request_bytes)
+            if native:
+                payload = ollama_payload(payload)
             routed = True
             admission = asyncio.create_task(run_in_threadpool(policy.route, payload, client_id))
             try:
@@ -89,6 +110,15 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
             raise
         policy.finish(route, body, response=checked)
         body = checked
+        if native:
+            choices = checked["choices"]
+            usage = checked.get("usage") or {}
+            body = {"model": route.payload["model"],
+                    "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "message": choices[0]["message"] if choices else {"role": "assistant", "content": ""},
+                    "done": True, "done_reason": choices[0].get("finish_reason", "stop") if choices else "stop",
+                    "prompt_eval_count": usage.get("prompt_tokens", 0),
+                    "eval_count": usage.get("completion_tokens", 0)}
         return JSONResponse(body, status_code=response.status_code,
                             headers={"X-StopSlop-Risks": json.dumps(route.risks), "X-StopSlop-Action": route.action,
                                      "X-StopSlop-Rules": ",".join(route.rules), "X-StopSlop-Output-Action": output_action,

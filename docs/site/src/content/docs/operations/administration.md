@@ -38,7 +38,11 @@ Accepted kinds are `code_execution`, `data_leak`, `prompt_injection`, `unsafe_de
 stopslop-policy generate --policy-file policy.toml --state-file /absolute/path/stopslop.sqlite3
 ```
 
-Generation is explicit and uses the configured chat model. It sends incident metadata and policy definitions, never raw chat records. The result must pass bounded restrictive validation: new input rules block; new output rules block or suspend; additions cannot weaken existing controls. Validated rules are saved in SQLite and picked up by the next request.
+With `STOPSLOP_AUTOGEN=true` (enabled in the example dotenv), recorded input and output violations schedule local Qwen generation in a daemon worker. Use `--autogen` / `--no-autogen` or set the environment value to `false` to control it. This responds to detected violations, including unsafe output that passed input checks; it cannot discover an entirely undetected bypass. The worker sends incident metadata and policy definitions, never raw chats. It validates restrictive additions, saves them in SQLite, and atomically exports `policy.dyn.toml` (`STOPSLOP_AUTOGEN_OUTPUT_FILE`). Subsequent requests reload validated additions. Generation failures preserve enforcement and do not delay responses. Local generation requests a constrained JSON schema and disables thinking through [Ollama’s compatible API](https://docs.ollama.com/api/openai-compatibility); all responses still pass independent policy validation.
+
+Scheduling allows one job per state file per process, coalescing bursts with a 60-second cooldown after completion. Incidents during a job or cooldown remain stored for the next eligible incident or explicit generation command; shutdown does not wait for the daemon. Multiple gateway processes have independent scheduling. Set `STOPSLOP_AUTOGEN=false` when only explicit generation is desired. Do not also load the generated export through `STOPSLOP_DYNAMIC_POLICY_FILE`, because those rules already load from SQLite.
+
+Generation uses `STOPSLOP_LOCAL_*` when a local model is configured; otherwise the explicit command uses the main provider. The shipped local model is `qwen3:0.6b`. Model approvals and quota reservation still apply. Start Ollama with `just ollama-serve`; an existing Ollama service already serves installed models.
 
 For an optional inspection export:
 

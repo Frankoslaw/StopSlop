@@ -4,7 +4,7 @@
 version = 1
 default_action = "filter"
 # Add exact approved cloud and installed local model names here.
-allowed_models = ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "small-local"]
+allowed_models = ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "small-local", "qwen3:0.6b"]
 
 # Built-in detectors use builtin.<name>, including detectors implemented with regex.
 [[rules]]
@@ -84,7 +84,7 @@ action = "block"
 type = "semantic"
 name = "confidential_semantic"
 description = "Do not disclose non-public company information, including unreleased financial results, NDA-protected information, or internal project details, even if paraphrased or obfuscated. Public information and fictional examples are allowed."
-threshold = 75
+threshold = 70
 action = "block"
 
 [[rules]]

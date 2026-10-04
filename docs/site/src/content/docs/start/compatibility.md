@@ -18,7 +18,7 @@ description: Supported integrations, request fields, and protocol boundaries.
 | Streaming / SSE | Unsupported | `stream` must be absent or `false` |
 | Images, audio, video, content-part arrays | Unsupported | Message content must be a string |
 | Responses API, embeddings, files, model listing | Unsupported | No compatibility promise for these endpoints |
-| Native Ollama `/api/chat` | Unsupported | Use Ollama's `/v1` compatibility endpoint |
+| Native Ollama `/api/chat` | Supported subset | HTTP gateway; text messages and explicit `stream: false` |
 | Distributed database coordination | Unsupported | SQLite requires local-disk transactional access |
 
 An OpenAI-compatible provider is not a guarantee that every SDK feature passes through. The request allowlist is deliberately small.

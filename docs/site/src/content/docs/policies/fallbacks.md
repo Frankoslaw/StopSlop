@@ -78,3 +78,7 @@ Successful responses include `X-StopSlop-Budget-Fallback` and `X-StopSlop-Model`
 ## Legacy no-file redirect mode
 
 Without a policy file, `STOPSLOP_POLICY=redirect` routes matched detector content to the configured hosted fallback and requires its URL, model, and key. The other no-file modes are `block`, `filter`, and `passthrough`. These names are runtime detector modes, not the TOML input action vocabulary. Prefer an explicit policy file for per-rule decisions, budgets, model approvals, and output policy.
+
+## Shipped Ollama fallback
+
+Run `just ollama-serve` (or use the running Ollama service). Both dotenv files select `STOPSLOP_LOCAL_MODEL=qwen3:0.6b` and `STOPSLOP_FALLBACK_CLASSIFIER=ollama`; the shipped policy approves that model. This supplies both budget chat fallback and independent local semantic assessment. Assessment failures still block.
