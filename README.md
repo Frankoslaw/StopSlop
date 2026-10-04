@@ -2,6 +2,10 @@
 
 An AI control layer for privacy, security, token quotas and authenticated agent permissions. Input and output use the same policy engine through an HTTP gateway or an in-process SDK transport. Python 3.14 is required.
 
+## Documentation site
+
+The [Astro + Starlight documentation](docs/site/README.md) covers quickstarts, gateway and SDK integrations, agent permissions, policy rules, output controls, token budgets, fallback routing, configuration, and operations. Run `pnpm install --frozen-lockfile` and `pnpm dev` from `docs/site` to browse locally. See the [GitHub Pages launch guide](docs/site/src/content/docs/contributing/github-pages.md) to enable the prepared deployment workflow when the project goes live.
+
 ## Start the demo
 
 ```powershell

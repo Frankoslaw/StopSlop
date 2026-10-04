@@ -1,0 +1,34 @@
+---
+title: Control what reaches your models.
+description: StopSlop documentation for policy enforcement, token budgets, privacy routing, and agent permissions.
+template: splash
+hero:
+  tagline: One policy engine for your chat gateway and Python SDK. Protect inputs, inspect outputs, enforce quotas, and authorize agent operations.
+  actions:
+    - text: Get started
+      link: ./start/quickstart/
+      icon: right-arrow
+    - text: Explore the policy model
+      link: ./policies/rules/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Build with clear boundaries
+
+<CardGrid>
+  <Card title="Integrate once" icon="puzzle">Use an HTTP gateway for remote and asynchronous clients, or a synchronous Python transport inside your application.</Card>
+  <Card title="Make policy explicit" icon="document">Define deterministic and semantic rules, model approvals, output actions, and authenticated capability permissions in TOML.</Card>
+  <Card title="Control token usage" icon="setting">Reserve capacity before work starts. Apply fixed quotas and rolling limits across processes sharing one SQLite database.</Card>
+  <Card title="Route deliberately" icon="random">Keep sensitive requests local and switch an exhausted model budget to an approved alternate destination.</Card>
+</CardGrid>
+
+## Choose your next step
+
+- **First integration:** start with the [quickstart](./start/quickstart/) and [supported usage](./start/compatibility/).
+- **Application developer:** use the [gateway](./integrations/gateway/) or [Python SDK](./integrations/python-sdk/).
+- **Policy owner:** configure [rules](./policies/rules/), [output checks](./policies/output/), [budgets](./policies/budgets/), and [fallbacks](./policies/fallbacks/).
+- **Operator:** review [deployment](./operations/deployment/), [storage](./operations/storage/), and [troubleshooting](./operations/troubleshooting/).
+
+These docs describe the current source checkout (workspace version 0.1.0). Installation examples use the uv workspace; they do not assume published packages. Read the compatibility page before attaching an existing agent framework.

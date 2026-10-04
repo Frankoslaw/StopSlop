@@ -208,3 +208,12 @@ policy.dyn.json
 
 # Optional exported generated policy configuration
 policy.dyn.toml
+
+# Astro documentation
+node_modules/
+.astro/
+.pnpm-store/
+
+# Keep documentation tooling despite the virtualenv Scripts exclusion above.
+!docs/site/scripts/
+!docs/site/scripts/check-links.mjs

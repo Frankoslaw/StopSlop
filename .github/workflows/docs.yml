@@ -1,0 +1,57 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/site/**', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['docs/site/**', '.github/workflows/docs.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs/site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11.19.0'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
+        env:
+          DOCS_SITE: ${{ vars.DOCS_SITE }}
+          DOCS_BASE: ${{ vars.DOCS_BASE }}
+      - run: pnpm check:links
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
+        with:
+          path: docs/site/dist
+
+  deploy:
+    if: github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy documentation
+        id: deployment
+        uses: actions/deploy-pages@v4
